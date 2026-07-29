@@ -15,7 +15,7 @@ import { subjectColors } from '@/ui/theme/colors';
 import { useTheme } from '@/ui/theme/ThemeProvider';
 
 interface LessonQuizStageProps {
-  readonly feedback: 'correct' | 'incorrect' | null;
+  readonly feedback: 'correct' | 'incorrect' | 'retry' | null;
   readonly index: number;
   readonly onExit: () => void;
   readonly onSubmit: (answer: string) => void;
@@ -108,7 +108,11 @@ export function LessonQuizStage({
                 { color: colors.foreground },
               ]}
             >
-              {feedback === 'correct' ? 'Correct' : 'Try again'}
+              {feedback === 'correct'
+                ? 'Correct'
+                : feedback === 'retry'
+                  ? 'Check the prompt and try again'
+                  : 'Try again'}
             </Text>
           )}
         </View>

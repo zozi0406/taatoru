@@ -6,14 +6,12 @@ import type {
   LessonSessionItem,
   LessonSessionSnapshot,
 } from '@/features/sessions/SessionRepository';
+import { checkAnswer } from '@/features/reviews/answerChecker';
 import { minimumTouchTarget } from '@/ui/theme/spacing';
 import { useTheme } from '@/ui/theme/ThemeProvider';
 import { reduceLesson, type LessonEvent } from './lessonReducer';
 import { LessonQuizStage } from './LessonQuizStage';
-import {
-  LessonSubjectStage,
-  primaryMeaning,
-} from './LessonSubjectStage';
+import { LessonSubjectStage } from './LessonSubjectStage';
 
 interface LessonSessionScreenProps {
   readonly initialSnapshot: LessonSessionSnapshot;
@@ -39,7 +37,7 @@ export function LessonSessionScreen({
   const theme = useTheme();
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [feedback, setFeedback] =
-    useState<'correct' | 'incorrect' | null>(null);
+    useState<'correct' | 'incorrect' | 'retry' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const byId = new Map(subjects.map((subject) => [subject.id!, subject]));
   const types = Object.fromEntries(
@@ -149,9 +147,22 @@ export function LessonSessionScreen({
         index={snapshot.queuePosition}
         onExit={onExit}
         onSubmit={(answer) => {
-          const correct = isAcceptedAnswer(subject, prompt, answer);
-          setFeedback(correct ? 'correct' : 'incorrect');
-          void transition({ type: correct ? 'correct' : 'incorrect' });
+          const result = checkAnswer({
+            answer,
+            prompt,
+            subject,
+          });
+          if (result.verdict === 'retry') {
+            setFeedback('retry');
+            return;
+          }
+          setFeedback(
+            result.verdict === 'correct' ? 'correct' : 'incorrect',
+          );
+          void transition({
+            type:
+              result.verdict === 'correct' ? 'correct' : 'incorrect',
+          });
         }}
         prompt={prompt}
         subject={subject}
@@ -171,32 +182,4 @@ export function LessonSessionScreen({
       )}
     </View>
   );
-}
-
-function isAcceptedAnswer(
-  subject: SubjectResource,
-  prompt: 'meaning' | 'reading',
-  answer: string,
-): boolean {
-  const normalized = normalize(answer);
-  if (prompt === 'meaning') {
-    return [
-      ...subject.data.meanings
-        .filter(({ accepted_answer }) => accepted_answer)
-        .map(({ meaning }) => meaning),
-      ...subject.data.auxiliary_meanings
-        .filter(({ type }) => type === 'whitelist')
-        .map(({ meaning }) => meaning),
-    ].some((candidate) => normalize(candidate) === normalized);
-  }
-  if ('readings' in subject.data) {
-    return subject.data.readings
-      .filter(({ accepted_answer }) => accepted_answer)
-      .some(({ reading }) => normalize(reading) === normalized);
-  }
-  return normalize(subject.data.characters ?? primaryMeaning(subject)) === normalized;
-}
-
-function normalize(value: string): string {
-  return value.trim().toLocaleLowerCase();
 }
