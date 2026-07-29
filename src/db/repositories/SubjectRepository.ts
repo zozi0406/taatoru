@@ -1,11 +1,15 @@
-import type { SubjectResource } from '@/api/types';
+import type {
+  IdentifiedResource,
+  SubjectData,
+  SubjectObject,
+} from '@/api/types';
 import type { Database } from '../Database';
 
 export class SubjectRepository {
   constructor(private readonly db: Database) {}
 
   replaceSubjects(
-    resources: readonly SubjectResource[],
+    resources: readonly IdentifiedResource<SubjectData, SubjectObject>[],
     cursor: string | null,
   ): Promise<void> {
     return this.db.transaction(async (tx) => {
