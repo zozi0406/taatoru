@@ -13,6 +13,11 @@ npm install
 npm run android
 ```
 
+The supported release toolchain remains Node 22 (`.nvmrc` and
+`package.json`). Foundation development through the authentication milestone
+was also run successfully with Node 26.5.0; that newer runtime is convenient
+for local work but is not yet the release or CI baseline.
+
 The generated `android/` and `ios/` projects are intentionally untracked.
 
 ## Credits and license
