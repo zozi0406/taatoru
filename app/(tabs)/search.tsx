@@ -1,33 +1,34 @@
-import { Text } from 'react-native';
+import { useRouter } from 'expo-router';
+import { useCallback } from 'react';
 
-import { Card } from '@/ui/components/Card';
-import { Screen } from '@/ui/components/Screen';
-import { SubjectChip } from '@/ui/components/SubjectChip';
-import { useTheme } from '@/ui/theme/ThemeProvider';
+import { useAppServices } from '@/app/AppProviders';
+import { SearchScreen } from '@/features/search/SearchScreen';
+import { searchSubjects } from '@/features/search/search';
 
-export default function SearchScreen() {
-  const theme = useTheme();
+const MAX_SEARCH_RESULTS = 50;
+
+export default function SearchRoute() {
+  const router = useRouter();
+  const services = useAppServices();
+  const loadResults = useCallback(
+    (query: string) =>
+      searchSubjects(services.db, query, MAX_SEARCH_RESULTS),
+    [services.db],
+  );
+  const openSubject = useCallback(
+    (id: number) => {
+      router.push({
+        pathname: '/subject/[id]',
+        params: { id: String(id) },
+      });
+    },
+    [router],
+  );
+
   return (
-    <Screen
-      title="Search"
-      intro={
-        <Text
-          selectable
-          style={[
-            theme.typography.body,
-            { color: theme.colors.textMuted },
-          ]}
-        >
-          Find subjects by characters, readings, meanings, or synonyms.
-        </Text>
-      }
-    >
-      <Card style={{ gap: theme.spacing.md }}>
-        <SubjectChip type="radical" />
-        <SubjectChip type="kanji" />
-        <SubjectChip type="vocabulary" />
-        <SubjectChip type="kana_vocabulary" />
-      </Card>
-    </Screen>
+    <SearchScreen
+      loadResults={loadResults}
+      onOpenSubject={openSubject}
+    />
   );
 }
