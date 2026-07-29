@@ -57,6 +57,11 @@ The initial visual components will be newly implemented. Tsurukame screenshots
 may be used as internal comparison references but will not be bundled into the
 application.
 
+Taatoru will not copy or derive data from Tsurukame's bundled
+`visually-similar-kanji.json` or the GPL-3.0 WaniKani Niai community
+databases from which it was generated. Visually similar kanji will come only
+from WaniKani API subject resources.
+
 ## First-release scope
 
 ### Included
@@ -72,7 +77,8 @@ application.
 - Review sessions, answer checking, session summaries, and recent mistakes.
 - Search by Japanese characters, readings, meanings, and user synonyms.
 - Subject details, mnemonics, context sentences, readings, meanings,
-  pronunciation audio, related subjects, notes, and synonyms.
+  pronunciation audio, related subjects, WaniKani-provided visually similar
+  kanji, notes, and synonyms.
 - Dashboard and analytics for available work, upcoming reviews, current-level
   progress, SRS distribution, accuracy, and leeches.
 - Local review notifications, launcher badge updates when supported, and
@@ -89,6 +95,7 @@ application.
 - Katakana and other specialized practice modes.
 - Exhaustive parity with Tsurukame's advanced display, font, and answer
   settings.
+- Supplementary community-generated visually similar kanji.
 - iOS and web releases.
 
 Deferred features must not leave inactive controls or unfinished routes in the
@@ -380,6 +387,13 @@ pronunciation audio, level, SRS stage, related subjects, notes, synonyms, and
 review statistics. Editable notes and synonyms use the pending
 study-material queue.
 
+For kanji subjects, Taatoru reads `visually_similar_subject_ids` from the
+WaniKani subject resource and resolves those IDs against locally cached
+subjects. The section preserves the API order, removes duplicate or unavailable
+subjects, and by default hides subjects above the user's current level. A
+subject-details setting may reveal above-level matches. Taatoru does not merge
+these results with Tsurukame's bundled supplementary character list.
+
 ## Dashboard and analytics
 
 The dashboard will be an original modern interpretation rather than a literal
@@ -489,6 +503,9 @@ Before implementing production sync behavior, tests will capture Tsurukame's:
 
 Pure tests will also cover lesson selection and ordering, answer checking,
 search normalization and ranking, analytics calculations, and SRS projections.
+Subject-detail tests will verify API ordering, local subject resolution,
+deduplication, unavailable-subject handling, and the above-current-level
+setting for visually similar kanji.
 
 ### Component tests
 
@@ -535,6 +552,7 @@ The first release is acceptable when:
 4. A review can be completed offline, retained across process death, and
    submitted exactly once.
 5. Search and subject details work from local data.
+   Visually similar kanji contain only subjects identified by the WaniKani API.
 6. Dashboard and analytics agree with controlled assignment fixtures.
 7. Review notifications match controlled hourly fixtures and are rescheduled
    after sync.
