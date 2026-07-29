@@ -27,6 +27,7 @@ function RootNavigator() {
         <Stack.Screen name="index" />
         <Stack.Protected guard={auth.status === 'authenticated'}>
           <Stack.Screen name="(tabs)" />
+          <Stack.Screen name="lessons/picker" />
           <Stack.Screen name="subject/[id]" />
         </Stack.Protected>
         <Stack.Protected guard={auth.status === 'unauthenticated'}>
