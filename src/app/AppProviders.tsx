@@ -6,7 +6,13 @@ import {
   useEffect,
   useState,
 } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  AppState,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { HttpWaniKaniApi } from '@/api/HttpWaniKaniApi';
@@ -24,6 +30,14 @@ import {
 } from '@/features/auth/tokenStore';
 import { PendingWriteSender } from '@/features/sync/PendingWriteSender';
 import {
+  ExpoNotificationPlatform,
+  loadReviewNotificationInput,
+  NotificationService,
+} from '@/features/notifications/NotificationService';
+import {
+  registerReviewBackgroundTask,
+} from '@/features/notifications/backgroundTask';
+import {
   type SyncEngine,
   type SyncMode,
   type SyncResult,
@@ -37,6 +51,7 @@ export interface AppServices {
   readonly manager: AuthManager;
   readonly tokenStore: TokenStore;
   readonly isOnline: () => Promise<boolean>;
+  readonly rebuildNotifications: () => Promise<void>;
   readonly synchronize: (mode: SyncMode) => Promise<SyncResult>;
 }
 
@@ -61,6 +76,14 @@ export function AppProviders({ children }: PropsWithChildren) {
         database = openedDatabase;
         const tokenStore = new SecureTokenStore();
         const syncRepository = new SyncRepository(openedDatabase);
+        const notificationService = new NotificationService(
+          new ExpoNotificationPlatform(),
+        );
+        const rebuildNotifications = async () => {
+          await notificationService.rebuild(
+            await loadReviewNotificationInput(openedDatabase, new Date()),
+          );
+        };
         const isOnline = async () => {
           try {
             const network = await Network.getNetworkStateAsync();
@@ -81,9 +104,7 @@ export function AppProviders({ children }: PropsWithChildren) {
             invalidate: () => {
               //
             },
-            updateNotifications: () => {
-              //
-            },
+            updateNotifications: rebuildNotifications,
             now: () => new Date(),
           });
         let runtimeToken: string | null = null;
@@ -111,6 +132,9 @@ export function AppProviders({ children }: PropsWithChildren) {
           }
           return runtimeSyncEngine.synchronize(mode);
         };
+        void registerReviewBackgroundTask().catch(() => {
+          // Background execution is opportunistic and may be unavailable.
+        });
         const manager = new AuthManager({
           db: openedDatabase,
           tokenStore,
@@ -124,6 +148,7 @@ export function AppProviders({ children }: PropsWithChildren) {
             manager,
             tokenStore,
             isOnline,
+            rebuildNotifications,
             synchronize,
           });
         }
@@ -145,6 +170,22 @@ export function AppProviders({ children }: PropsWithChildren) {
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (services === null) {
+      return;
+    }
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'background') {
+        void services.rebuildNotifications().catch(() => {
+          // Notification refresh should not block the app entering background.
+        });
+      }
+    });
+    return () => {
+      subscription.remove();
+    };
+  }, [services]);
 
   if (services === null) {
     return (
