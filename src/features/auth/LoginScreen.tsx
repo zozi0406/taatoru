@@ -9,6 +9,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { useTheme } from '@/ui/theme/ThemeProvider';
+
 interface LoginScreenProps {
   readonly busy: boolean;
   readonly error: string | null;
@@ -25,15 +27,41 @@ export function LoginScreen({
   onChangeAccount,
 }: LoginScreenProps) {
   const [token, setToken] = useState('');
+  const theme = useTheme();
   const submit = requiresAccountChange ? onChangeAccount : onLogin;
 
   return (
-    <SafeAreaView style={styles.screen}>
-      <View style={styles.card}>
-        <Text accessibilityRole="header" style={styles.title}>
+    <SafeAreaView
+      testID="login-screen"
+      style={[
+        styles.screen,
+        { backgroundColor: theme.colors.canvas },
+      ]}
+    >
+      <View
+        style={[
+          styles.card,
+          {
+            backgroundColor: theme.colors.surface,
+            borderColor: theme.colors.border,
+          },
+        ]}
+      >
+        <Text
+          accessibilityRole="header"
+          style={[
+            styles.title,
+            { color: theme.colors.text },
+          ]}
+        >
           Sign in to Taatoru
         </Text>
-        <Text style={styles.body}>
+        <Text
+          style={[
+            styles.body,
+            { color: theme.colors.textMuted },
+          ]}
+        >
           Paste a personal access token from your WaniKani account.
         </Text>
         <TextInput
@@ -43,12 +71,26 @@ export function LoginScreen({
           editable={!busy}
           onChangeText={setToken}
           placeholder="API token"
+          placeholderTextColor={theme.colors.textMuted}
           secureTextEntry
-          style={styles.input}
+          style={[
+            styles.input,
+            {
+              borderColor: theme.colors.border,
+              color: theme.colors.text,
+            },
+          ]}
           value={token}
         />
         {error === null ? null : (
-          <Text accessibilityRole="alert" style={styles.error}>
+          <Text
+            accessibilityRole="alert"
+            selectable
+            style={[
+              styles.error,
+              { color: theme.colors.danger },
+            ]}
+          >
             {error}
           </Text>
         )}
@@ -58,13 +100,19 @@ export function LoginScreen({
           onPress={() => void submit(token)}
           style={({ pressed }) => [
             styles.button,
+            { backgroundColor: theme.colors.accent },
             (pressed || busy) && styles.buttonPressed,
           ]}
         >
           {busy ? (
-            <ActivityIndicator color="#FFFFFF" />
+            <ActivityIndicator color={theme.colors.accentForeground} />
           ) : (
-            <Text style={styles.buttonText}>
+            <Text
+              style={[
+                styles.buttonText,
+                { color: theme.colors.accentForeground },
+              ]}
+            >
               {requiresAccountChange ? 'Replace account' : 'Sign in'}
             </Text>
           )}
@@ -76,14 +124,12 @@ export function LoginScreen({
 
 const styles = StyleSheet.create({
   body: {
-    color: '#56606C',
     fontSize: 16,
     lineHeight: 23,
     marginBottom: 20,
   },
   button: {
     alignItems: 'center',
-    backgroundColor: '#2563EB',
     borderRadius: 12,
     justifyContent: 'center',
     minHeight: 48,
@@ -92,22 +138,21 @@ const styles = StyleSheet.create({
     opacity: 0.65,
   },
   buttonText: {
-    color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '700',
   },
   card: {
-    backgroundColor: '#FFFFFF',
+    borderCurve: 'continuous',
+    borderWidth: 1,
     borderRadius: 18,
     padding: 24,
     width: '100%',
   },
   error: {
-    color: '#B42318',
     marginBottom: 12,
   },
   input: {
-    borderColor: '#CBD2DA',
+    borderCurve: 'continuous',
     borderRadius: 12,
     borderWidth: 1,
     fontSize: 16,
@@ -116,13 +161,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
   },
   screen: {
-    backgroundColor: '#F4F6F8',
     flex: 1,
     justifyContent: 'center',
     padding: 24,
   },
   title: {
-    color: '#17202A',
     fontSize: 28,
     fontWeight: '700',
     marginBottom: 8,

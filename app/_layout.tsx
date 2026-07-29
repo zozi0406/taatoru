@@ -3,12 +3,15 @@ import { StatusBar } from 'expo-status-bar';
 
 import { AppProviders } from '@/app/AppProviders';
 import { useAuth } from '@/features/auth/AuthProvider';
+import { ThemeProvider } from '@/ui/theme/ThemeProvider';
 
 export default function RootLayout() {
   return (
-    <AppProviders>
-      <RootNavigator />
-    </AppProviders>
+    <ThemeProvider>
+      <AppProviders>
+        <RootNavigator />
+      </AppProviders>
+    </ThemeProvider>
   );
 }
 
@@ -21,8 +24,9 @@ function RootNavigator() {
   return (
     <>
       <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="index" />
         <Stack.Protected guard={auth.status === 'authenticated'}>
-          <Stack.Screen name="index" />
+          <Stack.Screen name="(tabs)" />
         </Stack.Protected>
         <Stack.Protected guard={auth.status === 'unauthenticated'}>
           <Stack.Screen name="(auth)" />

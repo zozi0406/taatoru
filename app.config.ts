@@ -22,6 +22,11 @@ const config: ExpoConfig = {
   runtimeVersion: {
     policy: 'appVersion',
   },
+  extra: {
+    router: {
+      root: 'app',
+    },
+  },
   plugins: [
     'expo-router',
     'expo-background-task',

@@ -1,10 +1,12 @@
-import { screen } from '@testing-library/react-native';
+import config from '../../../app.config';
+import { rootRouteForAuth } from '../rootRoute';
 
-import IndexScreen from '../../../app/index';
-import { renderApp } from '../../test/render';
+test('routes the root path to the authenticated or login shell', () => {
+  expect(rootRouteForAuth('authenticated')).toBe('/(tabs)');
+  expect(rootRouteForAuth('unauthenticated')).toBe('/(auth)/login');
+  expect(rootRouteForAuth('bootstrapping')).toBeNull();
+});
 
-test('shows the Taatoru working title', async () => {
-  await renderApp(<IndexScreen />);
-
-  expect(screen.getByRole('header', { name: 'Taatoru' })).toBeOnTheScreen();
+test('keeps Expo Router on the top-level app directory', () => {
+  expect(config.extra?.router).toEqual({ root: 'app' });
 });

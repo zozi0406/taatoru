@@ -13,6 +13,7 @@ import { ResourceRepository } from '@/db/repositories/ResourceRepository';
 import { SyncRepository } from '@/features/sync/SyncRepository';
 import { userFixture } from '@/fixtures/api';
 import { renderApp } from '@/test/render';
+import { ThemeProvider } from '@/ui/theme/ThemeProvider';
 import {
   AccountChangeRequiredError,
   AuthManager,
@@ -110,13 +111,15 @@ test('a different account requires explicit replacement before pending data is c
 test('masks token input and submits its value', async () => {
   const onLogin = jest.fn(async () => undefined);
   await renderApp(
-    <LoginScreen
-      busy={false}
-      error={null}
-      requiresAccountChange={false}
-      onLogin={onLogin}
-      onChangeAccount={jest.fn()}
-    />,
+    <ThemeProvider scheme="light">
+      <LoginScreen
+        busy={false}
+        error={null}
+        requiresAccountChange={false}
+        onLogin={onLogin}
+        onChangeAccount={jest.fn()}
+      />
+    </ThemeProvider>,
   );
 
   const input = screen.getByLabelText('WaniKani API token');

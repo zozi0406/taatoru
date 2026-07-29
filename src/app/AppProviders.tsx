@@ -18,6 +18,7 @@ import {
 import { PendingWriteSender } from '@/features/sync/PendingWriteSender';
 import { SynchronizationEngine } from '@/features/sync/SyncEngine';
 import { SyncRepository } from '@/features/sync/SyncRepository';
+import { useTheme } from '@/ui/theme/ThemeProvider';
 
 interface AppServices {
   readonly db: Database;
@@ -26,6 +27,7 @@ interface AppServices {
 }
 
 export function AppProviders({ children }: PropsWithChildren) {
+  const theme = useTheme();
   const [services, setServices] = useState<AppServices | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -94,11 +96,22 @@ export function AppProviders({ children }: PropsWithChildren) {
   if (services === null) {
     return (
       <SafeAreaProvider>
-        <View style={styles.loading}>
+        <View
+          style={[
+            styles.loading,
+            { backgroundColor: theme.colors.canvas },
+          ]}
+        >
           {error === null ? (
             <ActivityIndicator accessibilityLabel="Opening Taatoru" />
           ) : (
-            <Text accessibilityRole="alert">{error}</Text>
+            <Text
+              accessibilityRole="alert"
+              selectable
+              style={{ color: theme.colors.danger }}
+            >
+              {error}
+            </Text>
           )}
         </View>
       </SafeAreaProvider>
