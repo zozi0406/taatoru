@@ -32,7 +32,7 @@ function RootNavigator() {
           <Stack.Screen name="subject/[id]" />
         </Stack.Protected>
         <Stack.Protected guard={auth.status === 'unauthenticated'}>
-          <Stack.Screen name="(auth)" />
+          <Stack.Screen name="(auth)/login" />
         </Stack.Protected>
       </Stack>
       <StatusBar style="auto" />
