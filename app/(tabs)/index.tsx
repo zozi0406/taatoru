@@ -1,48 +1,20 @@
-import { Text } from 'react-native';
+import { useCallback } from 'react';
 
-import { Card } from '@/ui/components/Card';
-import { Screen } from '@/ui/components/Screen';
-import { SyncStatus } from '@/ui/components/SyncStatus';
-import { useTheme } from '@/ui/theme/ThemeProvider';
+import { useAppServices } from '@/app/AppProviders';
+import { HomeScreen } from '@/features/home/HomeScreen';
+import { getDashboardSnapshot } from '@/features/home/dashboard';
 
-export default function HomeScreen() {
-  const theme = useTheme();
+export default function HomeRoute() {
+  const services = useAppServices();
+  const loadSnapshot = useCallback(async () => {
+    const online = await services.isOnline();
+    return getDashboardSnapshot(services.db, new Date(), online);
+  }, [services]);
+
   return (
-    <Screen
-      title="Home"
-      intro={
-        <Text
-          selectable
-          style={[
-            theme.typography.body,
-            { color: theme.colors.textMuted },
-          ]}
-        >
-          Your lessons, reviews, and next study window at a glance.
-        </Text>
-      }
-    >
-      <SyncStatus state="completed" detail="Local library is ready" />
-      <Card>
-        <Text
-          selectable
-          style={[
-            theme.typography.sectionTitle,
-            { color: theme.colors.text },
-          ]}
-        >
-          Study queue
-        </Text>
-        <Text
-          selectable
-          style={[
-            theme.typography.body,
-            { color: theme.colors.textMuted },
-          ]}
-        >
-          Available lessons and reviews will appear here.
-        </Text>
-      </Card>
-    </Screen>
+    <HomeScreen
+      loadSnapshot={loadSnapshot}
+      synchronize={services.synchronize}
+    />
   );
 }

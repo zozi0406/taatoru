@@ -3,13 +3,19 @@ import { Pressable, Text, View } from 'react-native';
 import { minimumTouchTarget } from '../theme/spacing';
 import { useTheme } from '../theme/ThemeProvider';
 
-export type SyncStatusState = 'idle' | 'syncing' | 'completed' | 'failed';
+export type SyncStatusState =
+  | 'idle'
+  | 'syncing'
+  | 'completed'
+  | 'failed'
+  | 'offline';
 
 const LABELS: Readonly<Record<SyncStatusState, string>> = {
   idle: 'Ready to synchronize',
   syncing: 'Synchronizing',
   completed: 'Synchronization complete',
   failed: 'Synchronization failed',
+  offline: 'Offline',
 };
 
 interface SyncStatusProps {

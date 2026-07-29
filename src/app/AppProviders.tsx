@@ -1,9 +1,16 @@
 import * as Network from 'expo-network';
-import { type PropsWithChildren, useEffect, useState } from 'react';
+import {
+  createContext,
+  type PropsWithChildren,
+  use,
+  useEffect,
+  useState,
+} from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { HttpWaniKaniApi } from '@/api/HttpWaniKaniApi';
+import type { WaniKaniApi } from '@/api/WaniKaniApi';
 import type { Database } from '@/db/Database';
 import { ExpoDatabase } from '@/db/ExpoDatabase';
 import { migrateDatabase } from '@/db/migrate';
@@ -16,15 +23,24 @@ import {
   type TokenStore,
 } from '@/features/auth/tokenStore';
 import { PendingWriteSender } from '@/features/sync/PendingWriteSender';
-import { SynchronizationEngine } from '@/features/sync/SyncEngine';
+import {
+  type SyncEngine,
+  type SyncMode,
+  type SyncResult,
+  SynchronizationEngine,
+} from '@/features/sync/SyncEngine';
 import { SyncRepository } from '@/features/sync/SyncRepository';
 import { useTheme } from '@/ui/theme/ThemeProvider';
 
-interface AppServices {
+export interface AppServices {
   readonly db: Database;
   readonly manager: AuthManager;
   readonly tokenStore: TokenStore;
+  readonly isOnline: () => Promise<boolean>;
+  readonly synchronize: (mode: SyncMode) => Promise<SyncResult>;
 }
+
+const AppServicesContext = createContext<AppServices | null>(null);
 
 export function AppProviders({ children }: PropsWithChildren) {
   const theme = useTheme();
@@ -45,34 +61,71 @@ export function AppProviders({ children }: PropsWithChildren) {
         database = openedDatabase;
         const tokenStore = new SecureTokenStore();
         const syncRepository = new SyncRepository(openedDatabase);
+        const isOnline = async () => {
+          try {
+            const network = await Network.getNetworkStateAsync();
+            return (
+              network.isConnected !== false &&
+              network.isInternetReachable !== false
+            );
+          } catch {
+            return false;
+          }
+        };
+        const createSyncEngine = (api: WaniKaniApi): SyncEngine =>
+          new SynchronizationEngine({
+            api,
+            repository: syncRepository,
+            pendingWrites: new PendingWriteSender(openedDatabase, api),
+            isOnline,
+            invalidate: () => {
+              //
+            },
+            updateNotifications: () => {
+              //
+            },
+            now: () => new Date(),
+          });
+        let runtimeToken: string | null = null;
+        let runtimeSyncEngine: SyncEngine | null = null;
+        const synchronize = async (mode: SyncMode): Promise<SyncResult> => {
+          const token = await tokenStore.get();
+          if (token === null) {
+            return {
+              status: 'failed',
+              error: {
+                kind: 'auth',
+                message: 'Sign in again to synchronize.',
+                status: 401,
+                safeUrl: null,
+                retryAt: null,
+                hibernating: false,
+              },
+            };
+          }
+          if (runtimeSyncEngine === null || runtimeToken !== token) {
+            runtimeToken = token;
+            runtimeSyncEngine = createSyncEngine(
+              new HttpWaniKaniApi({ token }),
+            );
+          }
+          return runtimeSyncEngine.synchronize(mode);
+        };
         const manager = new AuthManager({
           db: openedDatabase,
           tokenStore,
           apiFactory: (token) => new HttpWaniKaniApi({ token }),
-          syncFactory: (api) =>
-            new SynchronizationEngine({
-              api,
-              repository: syncRepository,
-              pendingWrites: new PendingWriteSender(openedDatabase, api),
-              isOnline: async () => {
-                const network = await Network.getNetworkStateAsync();
-                return (
-                  network.isConnected !== false &&
-                  network.isInternetReachable !== false
-                );
-              },
-              invalidate: () => {
-                //
-              },
-              updateNotifications: () => {
-                //
-              },
-              now: () => new Date(),
-            }),
+          syncFactory: createSyncEngine,
           clearAccount: () => syncRepository.clearForLogout(),
         });
         if (active) {
-          setServices({ db: openedDatabase, manager, tokenStore });
+          setServices({
+            db: openedDatabase,
+            manager,
+            tokenStore,
+            isOnline,
+            synchronize,
+          });
         }
       } catch (bootstrapError) {
         if (active) {
@@ -120,14 +173,24 @@ export function AppProviders({ children }: PropsWithChildren) {
 
   return (
     <SafeAreaProvider>
-      <AuthProvider
-        manager={services.manager}
-        tokenStore={services.tokenStore}
-      >
-        {children}
-      </AuthProvider>
+      <AppServicesContext value={services}>
+        <AuthProvider
+          manager={services.manager}
+          tokenStore={services.tokenStore}
+        >
+          {children}
+        </AuthProvider>
+      </AppServicesContext>
     </SafeAreaProvider>
   );
+}
+
+export function useAppServices(): AppServices {
+  const services = use(AppServicesContext);
+  if (services === null) {
+    throw new Error('useAppServices must be used within AppProviders');
+  }
+  return services;
 }
 
 const styles = StyleSheet.create({
