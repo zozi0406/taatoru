@@ -49,7 +49,10 @@ export class ExpoDatabase implements Database {
   }
 
   static async open(name = 'taatoru.db'): Promise<ExpoDatabase> {
-    const database = await SQLite.openDatabaseAsync(name);
+    const database = await SQLite.openDatabaseAsync(name, {
+      // Expo's blanket finalizer can double-free FTS5 internal statements.
+      finalizeUnusedStatementsBeforeClosing: false,
+    });
     return new ExpoDatabase(database);
   }
 
