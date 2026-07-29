@@ -1,49 +1,31 @@
-import { Text } from 'react-native';
+import { useRouter } from 'expo-router';
+import { useCallback } from 'react';
 
-import { Card } from '@/ui/components/Card';
-import { Screen } from '@/ui/components/Screen';
-import { useTheme } from '@/ui/theme/ThemeProvider';
+import { useAppServices } from '@/app/AppProviders';
+import { AnalyticsScreen } from '@/features/analytics/AnalyticsScreen';
+import { loadAnalyticsSnapshot } from '@/features/analytics/calculations';
 
-export default function AnalyticsScreen() {
-  const theme = useTheme();
+export default function AnalyticsRoute() {
+  const router = useRouter();
+  const services = useAppServices();
+  const loadSnapshot = useCallback(
+    () => loadAnalyticsSnapshot(services.db, new Date()),
+    [services.db],
+  );
+  const openSubject = useCallback(
+    (id: number) => {
+      router.push({
+        pathname: '/subject/[id]',
+        params: { id: String(id) },
+      });
+    },
+    [router],
+  );
+
   return (
-    <Screen
-      title="Analytics"
-      intro={
-        <Text
-          selectable
-          style={[
-            theme.typography.body,
-            { color: theme.colors.textMuted },
-          ]}
-        >
-          Understand your review workload and learning progress.
-        </Text>
-      }
-    >
-      <Card>
-        <Text
-          selectable
-          style={[
-            theme.typography.sectionTitle,
-            { color: theme.colors.text },
-          ]}
-        >
-          Learning overview
-        </Text>
-        <Text
-          selectable
-          style={[
-            theme.typography.body,
-            {
-              color: theme.colors.textMuted,
-              fontVariant: ['tabular-nums'],
-            },
-          ]}
-        >
-          0 reviews recorded locally
-        </Text>
-      </Card>
-    </Screen>
+    <AnalyticsScreen
+      loadSnapshot={loadSnapshot}
+      onOpenSubject={openSubject}
+    />
   );
 }
