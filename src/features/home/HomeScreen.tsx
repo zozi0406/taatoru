@@ -14,6 +14,7 @@ import type { DashboardSnapshot } from './dashboard';
 interface HomeScreenProps {
   readonly loadSnapshot: () => Promise<DashboardSnapshot>;
   readonly synchronize: (mode: 'quick' | 'full') => Promise<SyncResult>;
+  readonly onPickLessons?: () => void;
   readonly onStartLessons?: () => void;
   readonly onStartReviews?: () => void;
 }
@@ -23,6 +24,7 @@ type DashboardSection = 'counts' | 'forecast' | 'level' | 'srs';
 export function HomeScreen({
   loadSnapshot,
   synchronize,
+  onPickLessons,
   onStartLessons,
   onStartReviews,
 }: HomeScreenProps) {
@@ -199,6 +201,7 @@ export function HomeScreen({
               item,
               snapshot,
               theme,
+              onPickLessons,
               onStartLessons,
               onStartReviews,
             )
@@ -211,24 +214,50 @@ function renderSection(
   section: DashboardSection,
   snapshot: DashboardSnapshot,
   theme: TaatoruTheme,
+  onPickLessons?: () => void,
   onStartLessons?: () => void,
   onStartReviews?: () => void,
 ) {
   if (section === 'counts') {
     return (
-      <View style={{ flexDirection: 'row', gap: theme.spacing.md }}>
-        <CountAction
-          label="Lessons"
-          count={snapshot.lessonCount}
-          onPress={onStartLessons}
-          theme={theme}
-        />
-        <CountAction
-          label="Reviews"
-          count={snapshot.reviewCount}
-          onPress={onStartReviews}
-          theme={theme}
-        />
+      <View style={{ gap: theme.spacing.md }}>
+        <View style={{ flexDirection: 'row', gap: theme.spacing.md }}>
+          <CountAction
+            label="Lessons"
+            count={snapshot.lessonCount}
+            onPress={onStartLessons}
+            theme={theme}
+          />
+          <CountAction
+            label="Reviews"
+            count={snapshot.reviewCount}
+            onPress={onStartReviews}
+            theme={theme}
+          />
+        </View>
+        {snapshot.lessonCount === 0 || onPickLessons === undefined ? null : (
+          <Pressable
+            accessibilityLabel="Choose lessons"
+            accessibilityRole="button"
+            onPress={onPickLessons}
+            style={{
+              alignItems: 'center',
+              backgroundColor: theme.colors.surfaceMuted,
+              borderRadius: 12,
+              justifyContent: 'center',
+              minHeight: minimumTouchTarget,
+            }}
+          >
+            <Text
+              style={[
+                theme.typography.label,
+                { color: theme.colors.accent },
+              ]}
+            >
+              Choose lessons
+            </Text>
+          </Pressable>
+        )}
       </View>
     );
   }

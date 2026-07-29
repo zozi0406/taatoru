@@ -43,6 +43,11 @@ interface ProgressRow {
   readonly srsStage: number;
 }
 
+interface PendingProgressRow {
+  readonly assignmentId: number;
+  readonly operationKind: ProgressOperationKind;
+}
+
 interface StudyMaterialTargetRow {
   readonly subjectType: string;
   readonly localStudyMaterialId: number | null;
@@ -154,6 +159,19 @@ export class PendingWriteRepository {
     incorrectReadingAnswers: number,
   ): Promise<void> {
     return this.db.transaction(async (tx) => {
+      const existing = await tx.first<PendingProgressRow>(
+        `SELECT assignment_id AS assignmentId,
+                operation_kind AS operationKind
+         FROM pending_progress
+         WHERE subject_id = ?`,
+        [completion.subjectId],
+      );
+      if (
+        existing?.assignmentId === completion.assignmentId &&
+        existing.operationKind === kind
+      ) {
+        return;
+      }
       const progress = await currentProgress(tx, completion);
       const projection = projectSrsStage({
         kind,

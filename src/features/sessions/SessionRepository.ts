@@ -2,7 +2,11 @@ import type { SubjectResource } from '@/api/types';
 import type { Database } from '@/db/Database';
 import type { LessonCandidate } from '@/features/lessons/types';
 
-export type LessonSessionPhase = 'presentation' | 'quiz' | 'selection';
+export type LessonSessionPhase =
+  | 'complete'
+  | 'presentation'
+  | 'quiz'
+  | 'selection';
 export type LessonPrompt = 'meaning' | 'reading';
 
 export interface LessonSessionItem {
@@ -224,7 +228,8 @@ function parseStoredState(value: string): StoredLessonState {
   if (
     parsed.phase !== 'selection' &&
     parsed.phase !== 'presentation' &&
-    parsed.phase !== 'quiz'
+    parsed.phase !== 'quiz' &&
+    parsed.phase !== 'complete'
   ) {
     throw new Error('Invalid lesson session phase');
   }

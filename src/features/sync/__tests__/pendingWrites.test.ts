@@ -78,11 +78,14 @@ test('queues a review and updates local state in one transaction', async () => {
 test('queues lesson progress and advances the local projection', async () => {
   const db = await reviewDatabase(0);
   try {
-    await new PendingWriteRepository(db).completeLesson({
+    const repository = new PendingWriteRepository(db);
+    const completion = {
       assignmentId: assignmentFixture.id,
       subjectId: kanjiFixture.id,
       completedAt: FIXED_NOW,
-    });
+    };
+    await repository.completeLesson(completion);
+    await repository.completeLesson(completion);
 
     expect(
       await db.first(
@@ -91,6 +94,7 @@ test('queues lesson progress and advances the local projection', async () => {
         [kanjiFixture.id],
       ),
     ).toEqual({ kind: 'lesson_start' });
+    await expect(pendingProgressCount(db)).resolves.toBe(1);
     expect(
       await db.first(
         `SELECT srs_stage AS srsStage, last_mistake_at AS lastMistakeAt

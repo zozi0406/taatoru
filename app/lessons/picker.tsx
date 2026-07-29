@@ -63,7 +63,7 @@ export default function LessonPickerRoute() {
       loadCandidates={loadCandidates}
       onBegin={async (items) => {
         await repository.startLessonSession(items);
-        router.back();
+        router.replace('/lessons/session');
       }}
       onCancel={() => {
         void repository.clearLessonSession().finally(() => router.back());
