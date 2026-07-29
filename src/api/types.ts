@@ -1,3 +1,4 @@
+// Copyright 2025 David Sansome
 // Copyright 2026 Taatoru contributors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,8 +13,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// The resource shapes in this file adapt the WaniKani models used by
-// Tsurukame at revision 8e18ddf7f12c44e91cb0ad63bab31af7440648ea.
+// Modified by Taatoru from Tsurukame's WaniKaniAPI/Subject.swift and
+// WaniKaniAPI/APIClient.swift at revision
+// 8e18ddf7f12c44e91cb0ad63bab31af7440648ea.
 
 export type WaniKaniTimestamp = string;
 

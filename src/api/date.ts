@@ -1,3 +1,4 @@
+// Copyright 2025 David Sansome
 // Copyright 2026 Taatoru contributors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,8 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Timestamp compatibility is adapted from Tsurukame's WaniKaniDate at
-// revision 8e18ddf7f12c44e91cb0ad63bab31af7440648ea.
+// Modified by Taatoru from Tsurukame's WaniKaniAPI/APIClient.swift at revision
+// 8e18ddf7f12c44e91cb0ad63bab31af7440648ea.
 
 import { ApiDecodeError } from './errors';
 
