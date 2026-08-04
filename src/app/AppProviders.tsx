@@ -23,11 +23,13 @@ import { migrateDatabase } from '@/db/migrate';
 import {
   AuthManager,
   AuthProvider,
+  useAuth,
 } from '@/features/auth/AuthProvider';
 import {
   SecureTokenStore,
   type TokenStore,
 } from '@/features/auth/tokenStore';
+import { ConnectivityUploadRetry } from '@/features/connectivity/ConnectivityUploadRetry';
 import { PendingWriteSender } from '@/features/sync/PendingWriteSender';
 import {
   ExpoNotificationPlatform,
@@ -219,10 +221,30 @@ export function AppProviders({ children }: PropsWithChildren) {
           manager={services.manager}
           tokenStore={services.tokenStore}
         >
-          {children}
+          <AuthenticatedRuntime services={services}>
+            {children}
+          </AuthenticatedRuntime>
         </AuthProvider>
       </AppServicesContext>
     </SafeAreaProvider>
+  );
+}
+
+function AuthenticatedRuntime({
+  children,
+  services,
+}: PropsWithChildren<{ readonly services: AppServices }>) {
+  const auth = useAuth();
+  return (
+    <>
+      {auth.status === 'authenticated' ? (
+        <ConnectivityUploadRetry
+          db={services.db}
+          synchronize={services.synchronize}
+        />
+      ) : null}
+      {children}
+    </>
   );
 }
 
