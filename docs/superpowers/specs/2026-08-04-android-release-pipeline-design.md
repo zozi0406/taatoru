@@ -47,16 +47,29 @@ The release process trusts reviewed source rather than a tag name alone. Before 
 
 ### Secret-free GitHub continuous integration
 
-`.github/workflows/ci.yml` will run for pull requests and pushes to `main`. It will use Node.js from `.nvmrc`, install the locked dependency graph with `npm ci`, and run:
+`.github/workflows/ci.yml` will run for every pull request whose base branch is `main` and for every push to `main`. Pull requests targeting another branch will not start this workflow. The trigger will be equivalent to:
+
+```yaml
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+```
+
+The job will use Node.js from `.nvmrc`, install the locked dependency graph, and run every test and prebuild check that does not require an Android device or release credential:
 
 ```text
+npm ci
 npm run verify
 npx expo-doctor
 npm run prebuild:check
 git diff --exit-code
 ```
 
-The workflow will declare `contents: read`, cancel superseded runs for the same branch, and avoid all repository, environment, and organization secrets. Every external action will be pinned to a reviewed full commit hash.
+`npm run verify` covers lint, TypeScript checking, and the complete Jest suite. `npm run prebuild:check` proves that Expo can generate the native Android project from committed configuration. Emulator acceptance tests, signed builds, and Google Play operations remain outside GitHub Actions.
+
+The workflow will declare `contents: read`, cancel superseded runs for the same pull request or branch, and avoid all repository, environment, and organization secrets. Every external action will be pinned to a reviewed full commit hash. The repository ruleset will require this job to pass before a pull request can merge into `main`.
 
 ### EAS project and build profiles
 
@@ -171,6 +184,8 @@ Revoking an EAS maintainer, Expo GitHub App installation, signing credential, or
 Repository-level checks will verify:
 
 - GitHub CI contains no secret references and uses read-only permissions;
+- GitHub CI runs the full gate for pull requests targeting `main` and pushes to `main`;
+- GitHub CI does not run signed builds, emulator tests, or publication steps;
 - EAS build triggers match only version tags;
 - the publication workflow requires an explicit build identifier and approval;
 - all EAS workflow files validate against the current EAS schema;
@@ -204,7 +219,7 @@ The production `v0.1.0` release will remain manual after these stages. Automatic
 
 The release pipeline is ready when:
 
-- pull requests run the complete secret-free CI gate;
+- pull requests targeting `main` run the complete secret-free CI gate before merge;
 - GitHub stores no Expo, signing, or Google Play secret;
 - only a protected version tag starts an EAS release build;
 - the tag, source version, commit, and artifacts agree;
