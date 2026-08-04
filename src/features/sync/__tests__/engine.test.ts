@@ -17,7 +17,6 @@ import type {
   SyncDataRepository,
   SyncStateSnapshot,
 } from '../SyncRepository';
-import type { RecentMistake } from '../types';
 
 const NOW = new Date('2026-07-29T12:00:00.000Z');
 
@@ -207,30 +206,12 @@ test('does not overlap repository writes in phase two', async () => {
   });
 });
 
-test('full synchronization clears before fetching and restores recent mistakes', async () => {
+test('full synchronization fetches a complete generation before replacing the cache', async () => {
   const events: string[] = [];
   const api = eventApi(events);
   const repository = syncRepository();
-  const recentMistakes = [
-    { subjectId: 201, mistakenAt: '2026-07-29T11:00:00.000Z' },
-  ];
-  repository.prepareFullRefresh.mockImplementationOnce(async () => {
-    events.push('clear');
-    return recentMistakes;
-  });
-  repository.getStateSnapshot.mockImplementationOnce(async () => ({
-    cursors: {
-      assignments: null,
-      studyMaterials: null,
-      subjects: null,
-      voiceActors: null,
-      reviewStatistics: null,
-    },
-    progressIds: [],
-    studyMaterialIds: [],
-  }));
-  repository.restoreRecentMistakes.mockImplementationOnce(async () => {
-    events.push('restore');
+  repository.replaceFullRefresh.mockImplementationOnce(async () => {
+    events.push('replace');
   });
   const engine = new SynchronizationEngine({
     api,
@@ -245,18 +226,20 @@ test('full synchronization clears before fetching and restores recent mistakes',
   await expect(engine.synchronize('full')).resolves.toMatchObject({
     status: 'completed',
   });
-  expect(events.indexOf('clear')).toBeLessThan(
-    events.indexOf('subjects:start'),
-  );
-  expect(events.indexOf('restore')).toBeGreaterThan(
+  expect(events.indexOf('replace')).toBeGreaterThan(
     events.indexOf('review-statistics:end'),
   );
   expect(api.getSubjects).toHaveBeenCalledWith(null);
   expect(api.getAssignments).toHaveBeenCalledWith(null);
-  expect(repository.restoreRecentMistakes).toHaveBeenCalledWith(
-    recentMistakes,
+  expect(repository.replaceFullRefresh).toHaveBeenCalledWith(
+    expect.objectContaining({
+      assignments: expect.objectContaining({ data: [assignmentFixture] }),
+      subjects: expect.objectContaining({ data: [kanjiFixture] }),
+      user: userFixture,
+    }),
     NOW,
   );
+  expect(repository.markSyncCompleted).not.toHaveBeenCalled();
 });
 
 function eventApi(events: string[]) {
@@ -339,13 +322,8 @@ function syncRepository() {
 
   return {
     getStateSnapshot: jest.fn(async () => snapshot),
-    prepareFullRefresh: jest.fn(
-      async (
-        ..._args: Parameters<SyncDataRepository['prepareFullRefresh']>
-      ): Promise<readonly RecentMistake[]> => [],
-    ),
-    restoreRecentMistakes: jest.fn(
-      async (..._args: Parameters<SyncDataRepository['restoreRecentMistakes']>) =>
+    replaceFullRefresh: jest.fn(
+      async (..._args: Parameters<SyncDataRepository['replaceFullRefresh']>) =>
         undefined,
     ),
     replaceSubjects: jest.fn(

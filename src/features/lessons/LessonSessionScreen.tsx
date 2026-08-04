@@ -2,36 +2,35 @@ import { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 
 import type { SubjectResource } from '@/api/types';
-import type {
-  LessonSessionItem,
-  LessonSessionSnapshot,
-} from '@/features/sessions/SessionRepository';
+import type { LessonSessionSnapshot } from '@/features/sessions/SessionRepository';
 import { checkAnswer } from '@/features/reviews/answerChecker';
 import { minimumTouchTarget } from '@/ui/theme/spacing';
 import { useTheme } from '@/ui/theme/ThemeProvider';
-import { reduceLesson, type LessonEvent } from './lessonReducer';
+import {
+  reduceLesson,
+  type LessonEvent,
+  type LessonTransition,
+} from './lessonReducer';
 import { LessonQuizStage } from './LessonQuizStage';
 import { LessonSubjectStage } from './LessonSubjectStage';
 
 interface LessonSessionScreenProps {
   readonly initialSnapshot: LessonSessionSnapshot;
-  readonly onCompleteLesson: (item: LessonSessionItem) => Promise<void>;
+  readonly onCommitTransition: (
+    transition: LessonTransition,
+  ) => Promise<void>;
   readonly onExit: () => void;
   readonly onFinish: () => Promise<void>;
   readonly onPlayAudio?: (url: string) => void;
-  readonly onSaveSnapshot: (
-    snapshot: LessonSessionSnapshot,
-  ) => Promise<void>;
   readonly subjects: readonly SubjectResource[];
 }
 
 export function LessonSessionScreen({
   initialSnapshot,
-  onCompleteLesson,
+  onCommitTransition,
   onExit,
   onFinish,
   onPlayAudio,
-  onSaveSnapshot,
   subjects,
 }: LessonSessionScreenProps) {
   const theme = useTheme();
@@ -47,10 +46,7 @@ export function LessonSessionScreen({
   const transition = async (event: LessonEvent) => {
     const result = reduceLesson(snapshot, event, types);
     try {
-      if (result.completedItem !== null) {
-        await onCompleteLesson(result.completedItem);
-      }
-      await onSaveSnapshot(result.snapshot);
+      await onCommitTransition(result);
       setSnapshot(result.snapshot);
     } catch {
       setError('Unable to preserve lesson progress.');

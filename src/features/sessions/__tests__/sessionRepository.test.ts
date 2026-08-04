@@ -1,6 +1,15 @@
 import { migrateDatabase } from '@/db/migrate';
 import { NodeTestDatabase } from '@/db/NodeTestDatabase';
+import type {
+  Database,
+  DatabaseTransaction,
+  RunResult,
+  SqlValue,
+} from '@/db/Database';
+import { AssignmentRepository } from '@/db/repositories/AssignmentRepository';
+import { SubjectRepository } from '@/db/repositories/SubjectRepository';
 import type { LessonCandidate } from '@/features/lessons/types';
+import { assignmentFixture, kanjiFixture } from '@/fixtures/api';
 import { SessionRepository } from '../SessionRepository';
 
 const NOW = new Date('2026-07-29T12:00:00.000Z');
@@ -86,9 +95,65 @@ test('reloads subjects by ID after process recreation in queue order', async () 
   }
 });
 
-function candidate(subjectId: number): LessonCandidate {
+test('rolls back lesson completion when saving the next session snapshot fails', async () => {
+  const db = await NodeTestDatabase.open();
+  await migrateDatabase(db);
+  try {
+    await new SubjectRepository(db).replaceSubjects([kanjiFixture], null);
+    await new AssignmentRepository(db).replaceAssignments(
+      [assignmentFixture],
+      null,
+    );
+    const repository = new SessionRepository(db);
+    const previous = await repository.startLessonSession(
+      [candidate(kanjiFixture.id, assignmentFixture.id)],
+      NOW,
+    );
+    const next = {
+      ...previous,
+      phase: 'complete' as const,
+      queuePosition: 1,
+      quizState: {
+        ...previous.quizState,
+        completedSubjectIds: [kanjiFixture.id],
+      },
+    };
+    const failingDb = new FailSessionSaveDatabase(db);
+
+    await expect(
+      new SessionRepository(failingDb).commitLessonTransition(
+        {
+          assignmentId: assignmentFixture.id,
+          subjectId: kanjiFixture.id,
+        },
+        next,
+        NOW,
+      ),
+    ).rejects.toThrow('injected session save failure');
+
+    await expect(
+      db.first<{ count: number }>(
+        'SELECT COUNT(*) AS count FROM assignments WHERE id = ?',
+        [assignmentFixture.id],
+      ),
+    ).resolves.toEqual({ count: 1 });
+    await expect(
+      db.first<{ count: number }>(
+        'SELECT COUNT(*) AS count FROM pending_progress',
+      ),
+    ).resolves.toEqual({ count: 0 });
+    await expect(repository.loadLessonSession()).resolves.toEqual(previous);
+  } finally {
+    await db.close();
+  }
+});
+
+function candidate(
+  subjectId: number,
+  assignmentId = subjectId + 1_000,
+): LessonCandidate {
   return {
-    assignmentId: subjectId + 1_000,
+    assignmentId,
     available: true,
     excluded: false,
     lessonPosition: subjectId,
@@ -96,6 +161,76 @@ function candidate(subjectId: number): LessonCandidate {
     subjectId,
     subjectType: 'kanji',
   };
+}
+
+class FailSessionSaveDatabase implements Database {
+  constructor(private readonly delegate: Database) {}
+
+  run(
+    sql: string,
+    params?: readonly SqlValue[],
+  ): Promise<RunResult> {
+    return sessionSaveFails(sql)
+      ? Promise.reject(new Error('injected session save failure'))
+      : this.delegate.run(sql, params);
+  }
+
+  first<T>(
+    sql: string,
+    params?: readonly SqlValue[],
+  ): Promise<T | null> {
+    return this.delegate.first<T>(sql, params);
+  }
+
+  all<T>(
+    sql: string,
+    params?: readonly SqlValue[],
+  ): Promise<readonly T[]> {
+    return this.delegate.all<T>(sql, params);
+  }
+
+  transaction<T>(
+    operation: (tx: DatabaseTransaction) => Promise<T>,
+  ): Promise<T> {
+    return this.delegate.transaction((tx) =>
+      operation(new FailSessionSaveTransaction(tx)),
+    );
+  }
+
+  close(): Promise<void> {
+    return this.delegate.close();
+  }
+}
+
+class FailSessionSaveTransaction implements DatabaseTransaction {
+  constructor(private readonly delegate: DatabaseTransaction) {}
+
+  run(
+    sql: string,
+    params?: readonly SqlValue[],
+  ): Promise<RunResult> {
+    return sessionSaveFails(sql)
+      ? Promise.reject(new Error('injected session save failure'))
+      : this.delegate.run(sql, params);
+  }
+
+  first<T>(
+    sql: string,
+    params?: readonly SqlValue[],
+  ): Promise<T | null> {
+    return this.delegate.first<T>(sql, params);
+  }
+
+  all<T>(
+    sql: string,
+    params?: readonly SqlValue[],
+  ): Promise<readonly T[]> {
+    return this.delegate.all<T>(sql, params);
+  }
+}
+
+function sessionSaveFails(sql: string): boolean {
+  return sql.includes('UPDATE active_sessions');
 }
 
 async function seedSubject(

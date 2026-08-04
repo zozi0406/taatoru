@@ -9,7 +9,6 @@ import {
   type LessonSessionSnapshot,
   SessionRepository,
 } from '@/features/sessions/SessionRepository';
-import { PendingWriteRepository } from '@/features/sync/PendingWriteRepository';
 import { useTheme } from '@/ui/theme/ThemeProvider';
 
 export default function LessonSessionRoute() {
@@ -17,10 +16,6 @@ export default function LessonSessionRoute() {
   const { db } = useAppServices();
   const theme = useTheme();
   const sessions = useMemo(() => new SessionRepository(db), [db]);
-  const pendingWrites = useMemo(
-    () => new PendingWriteRepository(db),
-    [db],
-  );
   const [snapshot, setSnapshot] =
     useState<LessonSessionSnapshot | null>(null);
   const [subjects, setSubjects] =
@@ -75,20 +70,19 @@ export default function LessonSessionRoute() {
   return (
     <LessonSessionScreen
       initialSnapshot={snapshot}
-      onCompleteLesson={(item) =>
-        pendingWrites.completeLesson({
-          ...item,
-          completedAt: new Date(),
-        })
+      onCommitTransition={(transition) =>
+        sessions
+          .commitLessonTransition(
+            transition.completedItem,
+            transition.snapshot,
+          )
+          .then(() => undefined)
       }
       onExit={() => router.replace('/')}
       onFinish={async () => {
         await sessions.clearLessonSession();
         router.replace('/');
       }}
-      onSaveSnapshot={(next) =>
-        sessions.saveLessonSession(next).then(() => undefined)
-      }
       subjects={subjects}
     />
   );

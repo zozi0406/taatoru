@@ -37,6 +37,15 @@ export class AccountChangeRequiredError extends Error {
   }
 }
 
+export class InitialSyncError extends Error {
+  constructor() {
+    super(
+      'The initial WaniKani sync did not complete. Check your connection and try again.',
+    );
+    this.name = 'InitialSyncError';
+  }
+}
+
 interface AuthManagerOptions {
   readonly db: Database;
   readonly tokenStore: TokenStore;
@@ -46,7 +55,13 @@ interface AuthManagerOptions {
 }
 
 interface CachedUserRow {
-  readonly id: string;
+  readonly lastSyncAt: string | null;
+  readonly resourceJson: string;
+}
+
+interface CachedAccount {
+  readonly synchronized: boolean;
+  readonly user: Resource<UserData, 'user'>;
 }
 
 export class AuthManager {
@@ -54,13 +69,17 @@ export class AuthManager {
 
   async login(tokenValue: string): Promise<Resource<UserData, 'user'>> {
     const { token, api, user } = await this.validate(tokenValue);
-    const cachedUser = await this.cachedUser();
-    if (cachedUser !== null && cachedUser.id !== user.data.id) {
+    const cached = await this.cachedAccount();
+    if (cached !== null && cached.user.data.id !== user.data.id) {
       throw new AccountChangeRequiredError();
     }
 
+    if (cached === null || !cached.synchronized) {
+      await this.initialSync(api, user.data.id);
+    } else {
+      await this.opportunisticSync(api);
+    }
     await this.options.tokenStore.set(token);
-    await this.options.syncFactory(api).synchronize('quick');
     return user;
   }
 
@@ -69,13 +88,28 @@ export class AuthManager {
   ): Promise<Resource<UserData, 'user'>> {
     const { token, api, user } = await this.validate(tokenValue);
     await this.options.clearAccount();
+    await this.options.tokenStore.remove();
+    await this.initialSync(api, user.data.id);
     await this.options.tokenStore.set(token);
-    await this.options.syncFactory(api).synchronize('quick');
     return user;
   }
 
   async resume(token: string): Promise<Resource<UserData, 'user'>> {
-    return this.login(token);
+    const cached = await this.cachedAccount();
+    if (cached === null || !cached.synchronized) {
+      return this.login(token);
+    }
+    const normalizedToken = token.trim();
+    if (normalizedToken.length === 0) {
+      throw new EmptyTokenError();
+    }
+    void this.options
+      .syncFactory(this.options.apiFactory(normalizedToken))
+      .synchronize('quick')
+      .catch(() => {
+        // Cached access remains available when opportunistic refresh fails.
+      });
+    return cached.user;
   }
 
   async logout(): Promise<void> {
@@ -101,10 +135,44 @@ export class AuthManager {
     }
   }
 
-  private cachedUser(): Promise<CachedUserRow | null> {
-    return this.options.db.first<CachedUserRow>(
-      'SELECT id FROM user LIMIT 1',
+  private async initialSync(
+    api: WaniKaniApi,
+    expectedUserId: string,
+  ): Promise<void> {
+    const result = await this.options.syncFactory(api).synchronize('quick');
+    const cached = await this.cachedAccount();
+    if (
+      result.status !== 'completed' ||
+      cached?.user.data.id !== expectedUserId ||
+      !cached.synchronized
+    ) {
+      throw new InitialSyncError();
+    }
+  }
+
+  private async opportunisticSync(api: WaniKaniApi): Promise<void> {
+    try {
+      await this.options.syncFactory(api).synchronize('quick');
+    } catch {
+      // Existing synchronized cache remains authoritative for authentication.
+    }
+  }
+
+  private async cachedAccount(): Promise<CachedAccount | null> {
+    const row = await this.options.db.first<CachedUserRow>(
+      `SELECT u.resource_json AS resourceJson,
+              s.last_sync_at AS lastSyncAt
+       FROM user u
+       CROSS JOIN sync_state s
+       WHERE s.id = 1
+       LIMIT 1`,
     );
+    return row === null
+      ? null
+      : {
+          synchronized: row.lastSyncAt !== null,
+          user: JSON.parse(row.resourceJson) as Resource<UserData, 'user'>,
+        };
   }
 }
 

@@ -27,6 +27,7 @@ export default function HomeRoute() {
             // The dashboard still reflects the unchanged local lesson state.
           });
       }}
+      onStartReviews={() => router.push('/reviews/session')}
       synchronize={services.synchronize}
     />
   );

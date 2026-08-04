@@ -17,6 +17,7 @@
 // 8e18ddf7f12c44e91cb0ad63bab31af7440648ea.
 
 import type {
+  CollectionPage,
   IdentifiedResource,
   LevelProgressionData,
   Resource,
@@ -28,7 +29,12 @@ import type {
   VoiceActorData,
   AssignmentData,
 } from '@/api/types';
-import type { Database } from '@/db/Database';
+import type {
+  Database,
+  DatabaseTransaction,
+  RunResult,
+  SqlValue,
+} from '@/db/Database';
 import { AssignmentRepository } from '@/db/repositories/AssignmentRepository';
 import { ResourceRepository } from '@/db/repositories/ResourceRepository';
 import { ReviewStatisticRepository } from '@/db/repositories/ReviewStatisticRepository';
@@ -61,9 +67,8 @@ export interface SafeSyncErrorRecord {
 
 export interface SyncDataRepository {
   getStateSnapshot(): Promise<SyncStateSnapshot>;
-  prepareFullRefresh(now: Date): Promise<readonly RecentMistake[]>;
-  restoreRecentMistakes(
-    mistakes: readonly RecentMistake[],
+  replaceFullRefresh(
+    resources: FullRefreshResources,
     now: Date,
   ): Promise<void>;
   replaceSubjects(
@@ -105,6 +110,25 @@ export interface SyncDataRepository {
     error: SafeSyncErrorRecord,
     now: Date,
   ): Promise<void>;
+}
+
+export interface FullRefreshResources {
+  readonly assignments: CollectionPage<AssignmentData, 'assignment'>;
+  readonly levelProgressions: CollectionPage<
+    LevelProgressionData,
+    'level_progression'
+  >;
+  readonly reviewStatistics: CollectionPage<
+    ReviewStatisticData,
+    'review_statistic'
+  >;
+  readonly studyMaterials: CollectionPage<
+    StudyMaterialData,
+    'study_material'
+  >;
+  readonly subjects: CollectionPage<SubjectData, SubjectObject>;
+  readonly user: Resource<UserData, 'user'>;
+  readonly voiceActors: CollectionPage<VoiceActorData, 'voice_actor'>;
 }
 
 interface SyncStateRow {
@@ -174,7 +198,58 @@ export class SyncRepository implements SyncDataRepository {
     };
   }
 
-  async prepareFullRefresh(now: Date): Promise<readonly RecentMistake[]> {
+  async replaceFullRefresh(
+    resources: FullRefreshResources,
+    now: Date,
+  ): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      const repository = new SyncRepository(
+        new TransactionDatabase(tx),
+      );
+      const recentMistakes = await repository.collectRecentMistakes(now);
+
+      await tx.run('DELETE FROM assignments');
+      await tx.run('DELETE FROM study_materials');
+      await tx.run('DELETE FROM review_statistics');
+      await tx.run('DELETE FROM audio_urls');
+      await tx.run('DELETE FROM subject_progress');
+      await tx.run('DELETE FROM subjects_fts');
+      await tx.run('DELETE FROM subjects');
+      await tx.run('DELETE FROM voice_actors');
+      await tx.run('DELETE FROM recent_mistakes');
+
+      await repository.replaceSubjects(
+        resources.subjects.data,
+        resources.subjects.data_updated_at,
+      );
+      await repository.replaceAssignments(
+        resources.assignments.data,
+        resources.assignments.data_updated_at,
+      );
+      await repository.replaceStudyMaterials(
+        resources.studyMaterials.data,
+        resources.studyMaterials.data_updated_at,
+      );
+      await repository.replaceUser(resources.user);
+      await repository.replaceLevelProgressions(
+        resources.levelProgressions.data,
+      );
+      await repository.replaceVoiceActors(
+        resources.voiceActors.data,
+        resources.voiceActors.data_updated_at,
+      );
+      await repository.replaceReviewStatistics(
+        resources.reviewStatistics.data,
+        resources.reviewStatistics.data_updated_at,
+      );
+      await repository.restoreRecentMistakes(recentMistakes, now);
+      await repository.markSyncCompleted('full', now);
+    });
+  }
+
+  private async collectRecentMistakes(
+    now: Date,
+  ): Promise<readonly RecentMistake[]> {
     const recentMistakes = mergeRecentMistakes(
       await this.db.all<MistakeRow>(
         `SELECT subject_id AS subjectId, mistaken_at AS mistakenAt
@@ -187,39 +262,10 @@ export class SyncRepository implements SyncDataRepository {
       ),
       now,
     );
-
-    await this.db.transaction(async (tx) => {
-      await tx.run('DELETE FROM assignments');
-      await tx.run('DELETE FROM study_materials');
-      await tx.run('DELETE FROM review_statistics');
-      await tx.run('DELETE FROM audio_urls');
-      await tx.run('DELETE FROM subject_progress');
-      await tx.run('DELETE FROM subjects_fts');
-      await tx.run('DELETE FROM subjects');
-      await tx.run('DELETE FROM voice_actors');
-      await tx.run('DELETE FROM recent_mistakes');
-      for (const mistake of recentMistakes) {
-        await tx.run(
-          `INSERT INTO recent_mistakes (subject_id, mistaken_at)
-           VALUES (?, ?)`,
-          [mistake.subjectId, mistake.mistakenAt],
-        );
-      }
-      await tx.run(
-        `UPDATE sync_state SET
-          assignments_updated_at = NULL,
-          study_materials_updated_at = NULL,
-          subjects_updated_at = NULL,
-          voice_actors_updated_at = NULL,
-          review_statistics_updated_at = NULL
-         WHERE id = 1`,
-      );
-    });
-
     return recentMistakes;
   }
 
-  async restoreRecentMistakes(
+  private async restoreRecentMistakes(
     mistakes: readonly RecentMistake[],
     now: Date,
   ): Promise<void> {
@@ -395,5 +441,40 @@ export class SyncRepository implements SyncDataRepository {
          WHERE id = 1`,
       );
     });
+  }
+}
+
+class TransactionDatabase implements Database {
+  constructor(private readonly tx: DatabaseTransaction) {}
+
+  run(
+    sql: string,
+    params?: readonly SqlValue[],
+  ): Promise<RunResult> {
+    return this.tx.run(sql, params);
+  }
+
+  first<T>(
+    sql: string,
+    params?: readonly SqlValue[],
+  ): Promise<T | null> {
+    return this.tx.first<T>(sql, params);
+  }
+
+  all<T>(
+    sql: string,
+    params?: readonly SqlValue[],
+  ): Promise<readonly T[]> {
+    return this.tx.all<T>(sql, params);
+  }
+
+  transaction<T>(
+    operation: (tx: DatabaseTransaction) => Promise<T>,
+  ): Promise<T> {
+    return operation(this.tx);
+  }
+
+  close(): Promise<void> {
+    return Promise.resolve();
   }
 }

@@ -25,7 +25,7 @@ import type {
   SyncStateSnapshot,
 } from './SyncRepository';
 import { createSyncStore, type SyncPhase, type SyncStore } from './syncStore';
-import type { RecentMistake, SelectedPendingWrites } from './types';
+import type { SelectedPendingWrites } from './types';
 
 export type SyncMode = 'quick' | 'full';
 
@@ -88,7 +88,9 @@ export class SynchronizationEngine implements SyncEngine {
         result = { status: 'skipped', reason: 'offline' };
       } else {
         const updatedResources = await this.runSynchronization(mode, now);
-        await this.options.repository.markSyncCompleted(mode, now);
+        if (mode === 'quick') {
+          await this.options.repository.markSyncCompleted(mode, now);
+        }
         result = { status: 'completed', updatedResources };
       }
     } catch (error) {
@@ -125,43 +127,40 @@ export class SynchronizationEngine implements SyncEngine {
     mode: SyncMode,
     now: Date,
   ): Promise<number> {
-    let recentMistakes: readonly RecentMistake[] | null = null;
     if (mode === 'full') {
-      recentMistakes =
-        await this.options.repository.prepareFullRefresh(now);
+      return this.runFullSynchronization(now);
     }
 
-    try {
-      const state = await this.options.repository.getStateSnapshot();
-      const selectedWrites = this.selectWrites(state, mode);
-      this.setPhase('phase-one');
-      let subjectCount = 0;
-      await allOrThrow([
-        this.options.pendingWrites.sendSelectedPendingWrites(
-          { progressIds: selectedWrites.progressIds, studyMaterialIds: [] },
-          now,
-        ),
-        this.options.pendingWrites.sendSelectedPendingWrites(
-          {
-            progressIds: [],
-            studyMaterialIds: selectedWrites.studyMaterialIds,
-          },
-          now,
-        ),
-        (async () => {
-          const page = await this.options.api.getSubjects(
-            state.cursors.subjects,
-          );
-          await this.options.repository.replaceSubjects(
-            page.data,
-            page.data_updated_at,
-          );
-          subjectCount = page.data.length;
-        })(),
-      ]);
+    const state = await this.options.repository.getStateSnapshot();
+    const selectedWrites = this.selectWrites(state, mode);
+    this.setPhase('phase-one');
+    let subjectCount = 0;
+    await allOrThrow([
+      this.options.pendingWrites.sendSelectedPendingWrites(
+        { progressIds: selectedWrites.progressIds, studyMaterialIds: [] },
+        now,
+      ),
+      this.options.pendingWrites.sendSelectedPendingWrites(
+        {
+          progressIds: [],
+          studyMaterialIds: selectedWrites.studyMaterialIds,
+        },
+        now,
+      ),
+      (async () => {
+        const page = await this.options.api.getSubjects(
+          state.cursors.subjects,
+        );
+        await this.options.repository.replaceSubjects(
+          page.data,
+          page.data_updated_at,
+        );
+        subjectCount = page.data.length;
+      })(),
+    ]);
 
-      this.setPhase('phase-two');
-      const resources = await Promise.allSettled([
+    this.setPhase('phase-two');
+    const resources = await Promise.allSettled([
         this.options.api.getAssignments(state.cursors.assignments),
         this.options.api.getStudyMaterials(state.cursors.studyMaterials),
         this.options.api.getUser(),
@@ -170,76 +169,130 @@ export class SynchronizationEngine implements SyncEngine {
         this.options.api.getReviewStatistics(
           state.cursors.reviewStatistics,
         ),
-      ] as const);
-      const failures: unknown[] = [];
-      const store = async <T>(
-        result: PromiseSettledResult<T>,
-        operation: (value: T) => Promise<number>,
-      ): Promise<number> => {
-        if (result.status === 'rejected') {
-          failures.push(result.reason);
-          return 0;
-        }
-        try {
-          return await operation(result.value);
-        } catch (error) {
-          failures.push(error);
-          return 0;
-        }
-      };
-      const phaseTwoCounts = [
-        await store(resources[0], async (page) => {
+    ] as const);
+    const failures: unknown[] = [];
+    const store = async <T>(
+      result: PromiseSettledResult<T>,
+      operation: (value: T) => Promise<number>,
+    ): Promise<number> => {
+      if (result.status === 'rejected') {
+        failures.push(result.reason);
+        return 0;
+      }
+      try {
+        return await operation(result.value);
+      } catch (error) {
+        failures.push(error);
+        return 0;
+      }
+    };
+    const phaseTwoCounts = [
+      await store(resources[0], async (page) => {
           await this.options.repository.replaceAssignments(
             page.data,
             page.data_updated_at,
           );
           return page.data.length;
-        }),
-        await store(resources[1], async (page) => {
+      }),
+      await store(resources[1], async (page) => {
           await this.options.repository.replaceStudyMaterials(
             page.data,
             page.data_updated_at,
           );
           return page.data.length;
-        }),
-        await store(resources[2], async (resource) => {
+      }),
+      await store(resources[2], async (resource) => {
           await this.options.repository.replaceUser(resource);
           return 1;
-        }),
-        await store(resources[3], async (page) => {
+      }),
+      await store(resources[3], async (page) => {
           await this.options.repository.replaceLevelProgressions(page.data);
           return page.data.length;
-        }),
-        await store(resources[4], async (page) => {
+      }),
+      await store(resources[4], async (page) => {
           await this.options.repository.replaceVoiceActors(
             page.data,
             page.data_updated_at,
           );
           return page.data.length;
-        }),
-        await store(resources[5], async (page) => {
+      }),
+      await store(resources[5], async (page) => {
           await this.options.repository.replaceReviewStatistics(
             page.data,
             page.data_updated_at,
           );
           return page.data.length;
-        }),
-      ];
-      if (failures.length > 0) {
-        throw failures[0];
-      }
-      return (
-        subjectCount +
-        phaseTwoCounts.reduce((total, count) => total + count, 0)
-      );
-    } finally {
-      if (recentMistakes !== null) {
-        await this.options.repository.restoreRecentMistakes(
-          recentMistakes,
-          now,
-        );
-      }
+      }),
+    ];
+    if (failures.length > 0) {
+      throw failures[0];
     }
+    return (
+      subjectCount +
+      phaseTwoCounts.reduce((total, count) => total + count, 0)
+    );
+  }
+
+  private async runFullSynchronization(now: Date): Promise<number> {
+    const state = await this.options.repository.getStateSnapshot();
+    const selectedWrites = this.selectWrites(state, 'full');
+    this.setPhase('phase-one');
+    const subjectsPromise = this.options.api.getSubjects(null);
+    await allOrThrow([
+      this.options.pendingWrites.sendSelectedPendingWrites(
+        { progressIds: selectedWrites.progressIds, studyMaterialIds: [] },
+        now,
+      ),
+      this.options.pendingWrites.sendSelectedPendingWrites(
+        {
+          progressIds: [],
+          studyMaterialIds: selectedWrites.studyMaterialIds,
+        },
+        now,
+      ),
+      subjectsPromise.then(() => undefined),
+    ]);
+    const subjects = await subjectsPromise;
+
+    this.setPhase('phase-two');
+    const resourcePromises = [
+      this.options.api.getAssignments(null),
+      this.options.api.getStudyMaterials(null),
+      this.options.api.getUser(),
+      this.options.api.getLevelProgressions(),
+      this.options.api.getVoiceActors(null),
+      this.options.api.getReviewStatistics(null),
+    ] as const;
+    await allOrThrow(resourcePromises as readonly Promise<unknown>[]);
+    const [
+      assignments,
+      studyMaterials,
+      user,
+      levelProgressions,
+      voiceActors,
+      reviewStatistics,
+    ] = await Promise.all(resourcePromises);
+    await this.options.repository.replaceFullRefresh(
+      {
+        assignments,
+        levelProgressions,
+        reviewStatistics,
+        studyMaterials,
+        subjects,
+        user,
+        voiceActors,
+      },
+      now,
+    );
+    return (
+      subjects.data.length +
+      assignments.data.length +
+      studyMaterials.data.length +
+      1 +
+      levelProgressions.data.length +
+      voiceActors.data.length +
+      reviewStatistics.data.length
+    );
   }
 
   private selectWrites(

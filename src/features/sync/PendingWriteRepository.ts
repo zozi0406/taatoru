@@ -58,7 +58,23 @@ export class PendingWriteRepository {
   constructor(private readonly db: Database) {}
 
   completeLesson(completion: LessonCompletion): Promise<void> {
+    return this.db.transaction((tx) =>
+      this.completeLessonInTransaction(tx, completion),
+    );
+  }
+
+  completeReview(completion: ReviewCompletion): Promise<void> {
+    return this.db.transaction((tx) =>
+      this.completeReviewInTransaction(tx, completion),
+    );
+  }
+
+  completeLessonInTransaction(
+    tx: DatabaseTransaction,
+    completion: LessonCompletion,
+  ): Promise<void> {
     return this.completeProgress(
+      tx,
       completion,
       'lesson_start',
       0,
@@ -66,8 +82,12 @@ export class PendingWriteRepository {
     );
   }
 
-  completeReview(completion: ReviewCompletion): Promise<void> {
+  completeReviewInTransaction(
+    tx: DatabaseTransaction,
+    completion: ReviewCompletion,
+  ): Promise<void> {
     return this.completeProgress(
+      tx,
       completion,
       'review',
       completion.incorrectMeaningAnswers,
@@ -153,12 +173,13 @@ export class PendingWriteRepository {
   }
 
   private completeProgress(
+    tx: DatabaseTransaction,
     completion: LessonCompletion,
     kind: ProgressOperationKind,
     incorrectMeaningAnswers: number,
     incorrectReadingAnswers: number,
   ): Promise<void> {
-    return this.db.transaction(async (tx) => {
+    return (async () => {
       const existing = await tx.first<PendingProgressRow>(
         `SELECT assignment_id AS assignmentId,
                 operation_kind AS operationKind
@@ -239,7 +260,7 @@ export class PendingWriteRepository {
           [completion.subjectId, projection.lastMistakeAt],
         );
       }
-    });
+    })();
   }
 }
 

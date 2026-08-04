@@ -1,12 +1,16 @@
 import {
   assignmentFixture,
+  collectionPage,
   kanjiFixture,
+  levelProgressionFixture,
   reviewStatisticFixture,
   studyMaterialFixture,
   userFixture,
   vocabularyFixture,
   voiceActorFixture,
 } from '@/fixtures/api';
+import type { WaniKaniApi } from '@/api/WaniKaniApi';
+import type { SubjectData, SubjectObject } from '@/api/types';
 import type {
   Database,
   DatabaseTransaction,
@@ -20,11 +24,44 @@ import { ResourceRepository } from '@/db/repositories/ResourceRepository';
 import { ReviewStatisticRepository } from '@/db/repositories/ReviewStatisticRepository';
 import { StudyMaterialRepository } from '@/db/repositories/StudyMaterialRepository';
 import { SubjectRepository } from '@/db/repositories/SubjectRepository';
-import { SyncRepository } from '../SyncRepository';
+import { SynchronizationEngine } from '../SyncEngine';
+import {
+  type FullRefreshResources,
+  SyncRepository,
+} from '../SyncRepository';
 
 const NOW = new Date('2026-07-29T12:00:00.000Z');
 
-test('full refresh clears server caches while preserving local durable state', async () => {
+test('a failed full-refresh fetch leaves the previous cache generation intact', async () => {
+  const db = await populatedDatabase();
+  try {
+    const before = await cacheFingerprint(db);
+    const api = fullRefreshApi();
+    api.getAssignments.mockRejectedValueOnce(
+      new Error('assignment download failed'),
+    );
+    const engine = new SynchronizationEngine({
+      api,
+      repository: new SyncRepository(db),
+      pendingWrites: {
+        sendSelectedPendingWrites: async () => undefined,
+      },
+      isOnline: async () => true,
+      invalidate: () => undefined,
+      updateNotifications: () => undefined,
+      now: () => NOW,
+    });
+
+    await expect(engine.synchronize('full')).resolves.toMatchObject({
+      status: 'failed',
+    });
+    await expect(cacheFingerprint(db)).resolves.toEqual(before);
+  } finally {
+    await db.close();
+  }
+});
+
+test('full refresh replaces server caches while preserving local durable state', async () => {
   const db = await populatedDatabase();
   try {
     await db.run('PRAGMA foreign_keys = OFF');
@@ -69,17 +106,20 @@ test('full refresh clears server caches while preserving local durable state', a
       [NOW.toISOString()],
     );
 
-    const recentMistakes = await new SyncRepository(db).prepareFullRefresh(NOW);
+    await new SyncRepository(db).replaceFullRefresh(
+      fullRefreshResources(),
+      NOW,
+    );
 
     await expectCounts(db, {
-      assignments: 0,
-      audio_urls: 0,
-      review_statistics: 0,
-      study_materials: 0,
-      subject_progress: 0,
-      subjects: 0,
-      subjects_fts: 0,
-      voice_actors: 0,
+      assignments: 1,
+      audio_urls: 1,
+      review_statistics: 1,
+      study_materials: 1,
+      subject_progress: 1,
+      subjects: 2,
+      subjects_fts: 2,
+      voice_actors: 1,
       pending_progress: 1,
       pending_study_materials: 1,
       recent_mistakes: 1,
@@ -87,7 +127,12 @@ test('full refresh clears server caches while preserving local durable state', a
       sync_errors: 1,
       user: 1,
     });
-    expect(recentMistakes).toEqual([
+    expect(
+      await db.all(
+        `SELECT subject_id AS subjectId, mistaken_at AS mistakenAt
+         FROM recent_mistakes ORDER BY subject_id`,
+      ),
+    ).toEqual([
       {
         subjectId: kanjiFixture.id,
         mistakenAt: '2026-07-29T11:00:00.000Z',
@@ -101,11 +146,11 @@ test('full refresh clears server caches while preserving local durable state', a
          FROM sync_state WHERE id = 1`,
       ),
     ).toEqual({
-      assignments_updated_at: null,
-      study_materials_updated_at: null,
-      subjects_updated_at: null,
-      voice_actors_updated_at: null,
-      review_statistics_updated_at: null,
+      assignments_updated_at: assignmentFixture.data_updated_at,
+      study_materials_updated_at: studyMaterialFixture.data_updated_at,
+      subjects_updated_at: kanjiFixture.data_updated_at,
+      voice_actors_updated_at: voiceActorFixture.data_updated_at,
+      review_statistics_updated_at: reviewStatisticFixture.data_updated_at,
     });
   } finally {
     await db.close();
@@ -221,14 +266,7 @@ test('full refresh restores recent mistakes after assignments are rebuilt', asyn
        VALUES (?, ?)`,
       [kanjiFixture.id, '2026-07-29T11:00:00.000Z'],
     );
-    const recentMistakes = await repository.prepareFullRefresh(NOW);
-
-    await new SubjectRepository(db).replaceSubjects([kanjiFixture], null);
-    await new AssignmentRepository(db).replaceAssignments(
-      [assignmentFixture],
-      null,
-    );
-    await repository.restoreRecentMistakes(recentMistakes, NOW);
+    await repository.replaceFullRefresh(fullRefreshResources(), NOW);
 
     expect(
       await db.first(
@@ -237,6 +275,23 @@ test('full refresh restores recent mistakes after assignments are rebuilt', asyn
         [kanjiFixture.id],
       ),
     ).toEqual({ lastMistakeAt: '2026-07-29T11:00:00.000Z' });
+  } finally {
+    await db.close();
+  }
+});
+
+test('a failed full-refresh commit rolls the entire cache generation back', async () => {
+  const db = await populatedDatabase();
+  try {
+    const before = await cacheFingerprint(db);
+    const repository = new SyncRepository(
+      new FailBeforeCommitDatabase(db),
+    );
+
+    await expect(
+      repository.replaceFullRefresh(fullRefreshResources(), NOW),
+    ).rejects.toThrow('injected commit failure');
+    await expect(cacheFingerprint(db)).resolves.toEqual(before);
   } finally {
     await db.close();
   }
@@ -334,6 +389,64 @@ async function populatedDatabase(): Promise<NodeTestDatabase> {
     'review-statistics-cursor',
   );
   return db;
+}
+
+async function cacheFingerprint(db: Database) {
+  return {
+    assignments: await db.all('SELECT * FROM assignments ORDER BY id'),
+    reviewStatistics: await db.all(
+      'SELECT * FROM review_statistics ORDER BY id',
+    ),
+    studyMaterials: await db.all(
+      'SELECT * FROM study_materials ORDER BY id',
+    ),
+    subjects: await db.all('SELECT * FROM subjects ORDER BY id'),
+    syncState: await db.first('SELECT * FROM sync_state WHERE id = 1'),
+    user: await db.all('SELECT * FROM user ORDER BY id'),
+    voiceActors: await db.all('SELECT * FROM voice_actors ORDER BY id'),
+  };
+}
+
+function fullRefreshApi() {
+  return {
+    getSubjects: jest.fn(async () => collectionPage([kanjiFixture])),
+    getAssignments: jest.fn(async () => collectionPage([assignmentFixture])),
+    getStudyMaterials: jest.fn(async () =>
+      collectionPage([studyMaterialFixture]),
+    ),
+    getUser: jest.fn(async () => userFixture),
+    getLevelProgressions: jest.fn(async () =>
+      collectionPage([levelProgressionFixture]),
+    ),
+    getVoiceActors: jest.fn(async () => collectionPage([voiceActorFixture])),
+    getReviewStatistics: jest.fn(async () =>
+      collectionPage([reviewStatisticFixture]),
+    ),
+    rateLimit: {
+      limit: 60,
+      requestsInServerMinute: 0,
+      requestsRemaining: 60,
+      resetAfterMs: 60_000,
+      estimatedClockSkewMs: 0,
+    },
+  } as unknown as WaniKaniApi & {
+    getAssignments: jest.MockedFunction<WaniKaniApi['getAssignments']>;
+  };
+}
+
+function fullRefreshResources(): FullRefreshResources {
+  return {
+    assignments: collectionPage([assignmentFixture]),
+    levelProgressions: collectionPage([levelProgressionFixture]),
+    reviewStatistics: collectionPage([reviewStatisticFixture]),
+    studyMaterials: collectionPage([studyMaterialFixture]),
+    subjects: collectionPage<SubjectData, SubjectObject>([
+      kanjiFixture,
+      vocabularyFixture,
+    ]),
+    user: userFixture,
+    voiceActors: collectionPage([voiceActorFixture]),
+  };
 }
 
 async function expectCounts(

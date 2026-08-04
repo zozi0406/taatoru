@@ -9,6 +9,7 @@ import { radicalFixture } from '@/fixtures/api';
 import { renderApp } from '@/test/render';
 import { ThemeProvider } from '@/ui/theme/ThemeProvider';
 import { LessonSessionScreen } from '../LessonSessionScreen';
+import type { LessonTransition } from '../lessonReducer';
 
 jest.mock('expo-audio', () => ({
   useAudioPlayer: () => ({
@@ -18,17 +19,18 @@ jest.mock('expo-audio', () => ({
 }));
 
 test('moves from subject presentation to quiz and completes once', async () => {
-  const onCompleteLesson = jest.fn(async () => undefined);
+  const onCommitTransition = jest.fn<
+    Promise<void>,
+    [LessonTransition]
+  >(async () => undefined);
   const onFinish = jest.fn(async () => undefined);
-  const onSaveSnapshot = jest.fn(async () => undefined);
   await renderApp(
     <ThemeProvider scheme="light">
       <LessonSessionScreen
         initialSnapshot={snapshot()}
-        onCompleteLesson={onCompleteLesson}
+        onCommitTransition={onCommitTransition}
         onExit={jest.fn()}
         onFinish={onFinish}
-        onSaveSnapshot={onSaveSnapshot}
         subjects={[radicalFixture]}
       />
     </ThemeProvider>,
@@ -47,7 +49,11 @@ test('moves from subject presentation to quiz and completes once', async () => {
     fireEvent.press(screen.getByRole('button', { name: 'Submit answer' }));
   });
   expect(await screen.findByText('Try again')).toBeVisible();
-  expect(onCompleteLesson).not.toHaveBeenCalled();
+  expect(
+    onCommitTransition.mock.calls.some(
+      ([transition]) => transition.completedItem !== null,
+    ),
+  ).toBe(false);
 
   await act(async () => {
     fireEvent.changeText(screen.getByLabelText('Meaning answer'), 'ground');
@@ -55,11 +61,15 @@ test('moves from subject presentation to quiz and completes once', async () => {
   await act(async () => {
     fireEvent.press(screen.getByRole('button', { name: 'Submit answer' }));
   });
-  expect(onCompleteLesson).toHaveBeenCalledTimes(1);
-  expect(onCompleteLesson).toHaveBeenCalledWith({
-    assignmentId: 501,
-    subjectId: radicalFixture.id,
-  });
+  expect(onCommitTransition).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      completedItem: {
+        assignmentId: 501,
+        subjectId: radicalFixture.id,
+      },
+      snapshot: expect.objectContaining({ phase: 'complete' }),
+    }),
+  );
   expect(await screen.findByText('Lesson complete')).toBeVisible();
 
   await act(async () => {
@@ -88,11 +98,10 @@ test('renders a radical image and exposes pronunciation audio', async () => {
     <ThemeProvider scheme="light">
       <LessonSessionScreen
         initialSnapshot={snapshot()}
-        onCompleteLesson={jest.fn(async () => undefined)}
+        onCommitTransition={jest.fn(async () => undefined)}
         onExit={jest.fn()}
         onFinish={jest.fn(async () => undefined)}
         onPlayAudio={onPlayAudio}
-        onSaveSnapshot={jest.fn(async () => undefined)}
         subjects={[imageRadical]}
       />
     </ThemeProvider>,

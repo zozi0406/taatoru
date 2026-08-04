@@ -11,6 +11,7 @@ import type { Resource, UserData } from '@/api/types';
 import { migrateDatabase } from '@/db/migrate';
 import { NodeTestDatabase } from '@/db/NodeTestDatabase';
 import { ResourceRepository } from '@/db/repositories/ResourceRepository';
+import type { SyncResult } from '@/features/sync/SyncEngine';
 import { SyncRepository } from '@/features/sync/SyncRepository';
 import { userFixture } from '@/fixtures/api';
 import { renderApp } from '@/test/render';
@@ -51,6 +52,105 @@ test('validates, persists, and starts the first quick sync', async () => {
     expect(harness.api.getUser).toHaveBeenCalledTimes(1);
     expect(harness.tokenStore.set).toHaveBeenCalledWith('wk-token');
     expect(harness.synchronize).toHaveBeenCalledWith('quick');
+  } finally {
+    await harness.db.close();
+  }
+});
+
+test('does not authenticate or persist a token when the required initial sync fails', async () => {
+  const harness = await authHarness();
+  harness.synchronize.mockResolvedValueOnce({
+    status: 'failed',
+    error: {
+      kind: 'network',
+      message: 'Network request failed',
+      status: null,
+      safeUrl: null,
+      retryAt: null,
+      hibernating: false,
+    },
+  });
+  try {
+    await expect(
+      harness.manager.login('new-token'),
+    ).rejects.toThrow('initial WaniKani sync');
+    expect(harness.tokenStore.set).not.toHaveBeenCalled();
+    await expect(
+      harness.db.first('SELECT id FROM user LIMIT 1'),
+    ).resolves.toBeNull();
+  } finally {
+    await harness.db.close();
+  }
+});
+
+test('does not authenticate when initial synchronization completes without caching the user', async () => {
+  const harness = await authHarness();
+  harness.synchronize.mockResolvedValueOnce({
+    status: 'completed',
+    updatedResources: 0,
+  });
+  try {
+    await expect(
+      harness.manager.login('new-token'),
+    ).rejects.toThrow('initial WaniKani sync');
+    expect(harness.tokenStore.set).not.toHaveBeenCalled();
+  } finally {
+    await harness.db.close();
+  }
+});
+
+test('does not treat a partial user row from a failed first sync as an offline cache', async () => {
+  const harness = await authHarness();
+  harness.synchronize.mockImplementationOnce(async () => {
+    await new ResourceRepository(harness.db).replaceUser(userFixture);
+    return {
+      status: 'failed',
+      error: {
+        kind: 'network',
+        message: 'Network request failed',
+        status: null,
+        safeUrl: null,
+        retryAt: null,
+        hibernating: false,
+      },
+    };
+  });
+  try {
+    await expect(
+      harness.manager.login('new-token'),
+    ).rejects.toThrow('initial WaniKani sync');
+    harness.synchronize.mockResolvedValueOnce({
+      status: 'skipped',
+      reason: 'offline',
+    });
+
+    await expect(
+      harness.manager.login('new-token'),
+    ).rejects.toThrow('initial WaniKani sync');
+    expect(harness.tokenStore.set).not.toHaveBeenCalled();
+  } finally {
+    await harness.db.close();
+  }
+});
+
+test('resumes from the cached user while startup synchronization is offline', async () => {
+  const harness = await authHarness();
+  try {
+    await new ResourceRepository(harness.db).replaceUser(userFixture);
+    await new SyncRepository(harness.db).markSyncCompleted(
+      'quick',
+      new Date('2026-07-29T12:00:00.000Z'),
+    );
+    harness.synchronize.mockResolvedValueOnce({
+      status: 'skipped',
+      reason: 'offline',
+    });
+
+    await expect(
+      harness.manager.resume('stored-token'),
+    ).resolves.toEqual(userFixture);
+    expect(harness.api.getUser).not.toHaveBeenCalled();
+    expect(harness.apiFactory).toHaveBeenCalledWith('stored-token');
   } finally {
     await harness.db.close();
   }
@@ -240,10 +340,17 @@ async function authHarness(user = userFixture) {
     getUser: jest.MockedFunction<WaniKaniApi['getUser']>;
   };
   const apiFactory = jest.fn(() => api);
-  const synchronize = jest.fn(async () => ({
-    status: 'completed' as const,
-    updatedResources: 0,
-  }));
+  const synchronize = jest.fn<Promise<SyncResult>, []>(async () => {
+    await new ResourceRepository(db).replaceUser(user);
+    await new SyncRepository(db).markSyncCompleted(
+      'quick',
+      new Date('2026-07-29T12:00:00.000Z'),
+    );
+    return {
+      status: 'completed',
+      updatedResources: 0,
+    };
+  });
   const clearAccount = jest.fn(async () => {
     await new SyncRepository(db).clearForLogout();
   });

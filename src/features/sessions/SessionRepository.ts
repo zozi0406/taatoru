@@ -1,6 +1,7 @@
 import type { SubjectResource } from '@/api/types';
-import type { Database } from '@/db/Database';
+import type { Database, DatabaseTransaction } from '@/db/Database';
 import type { LessonCandidate } from '@/features/lessons/types';
+import { PendingWriteRepository } from '@/features/sync/PendingWriteRepository';
 
 export type LessonSessionPhase =
   | 'complete'
@@ -83,11 +84,37 @@ export class SessionRepository {
     snapshot: LessonSessionSnapshot,
     now = new Date(),
   ): Promise<LessonSessionSnapshot> {
+    return this.saveLessonSessionWith(this.db, snapshot, now);
+  }
+
+  commitLessonTransition(
+    completedItem: LessonSessionItem | null,
+    snapshot: LessonSessionSnapshot,
+    now = new Date(),
+  ): Promise<LessonSessionSnapshot> {
+    return this.db.transaction(async (tx) => {
+      if (completedItem !== null) {
+        await new PendingWriteRepository(
+          this.db,
+        ).completeLessonInTransaction(tx, {
+          ...completedItem,
+          completedAt: now,
+        });
+      }
+      return this.saveLessonSessionWith(tx, snapshot, now);
+    });
+  }
+
+  private async saveLessonSessionWith(
+    executor: DatabaseTransaction,
+    snapshot: LessonSessionSnapshot,
+    now: Date,
+  ): Promise<LessonSessionSnapshot> {
     const updated = {
       ...snapshot,
       updatedAt: now.toISOString(),
     };
-    await this.db.run(
+    await executor.run(
       `UPDATE active_sessions
        SET state_json = ?, updated_at = ?
        WHERE id = 'lesson' AND kind = 'lesson'`,
