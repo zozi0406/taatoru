@@ -1,1 +1,3 @@
-// Shared native test setup belongs here as the app gains platform integrations.
+jest.mock('react-native-reanimated', () =>
+  require('react-native-reanimated/mock'),
+);
