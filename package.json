@@ -12,6 +12,7 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "test:release-config": "node --test scripts/release/*.test.mjs",
+    "validate:release": "node scripts/release/validate-release-ref.mjs",
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
     "verify": "npm run lint && npm run typecheck && npm test -- --runInBand && npm run test:release-config",
