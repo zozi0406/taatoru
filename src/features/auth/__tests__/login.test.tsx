@@ -9,7 +9,7 @@ import * as Network from 'expo-network';
 import { Pressable, Text } from 'react-native';
 
 import type { WaniKaniApi } from '@/api/WaniKaniApi';
-import { ApiError } from '@/api/errors';
+import { ApiError, NetworkError } from '@/api/errors';
 import type { Resource, UserData } from '@/api/types';
 import { migrateDatabase } from '@/db/migrate';
 import { NodeTestDatabase } from '@/db/NodeTestDatabase';
@@ -413,12 +413,16 @@ test.each([
   }
 });
 
-test('retries initial sync once after a stable reconnect', async () => {
+test('retries initial sync when setup starts offline and connectivity returns', async () => {
   const harness = await authHarness();
   harness.tokenStore.getPending.mockResolvedValue('pending-token');
   harness.synchronize.mockResolvedValueOnce({
     status: 'skipped',
     reason: 'offline',
+  });
+  jest.spyOn(Network, 'getNetworkStateAsync').mockResolvedValue({
+    isConnected: false,
+    isInternetReachable: false,
   });
   let networkListener: ((state: Network.NetworkState) => void) | null = null;
   jest
@@ -446,7 +450,6 @@ test('retries initial sync once after a stable reconnect', async () => {
     jest.useFakeTimers();
     jest.setSystemTime(new Date('2026-08-04T12:00:00.000Z'));
     await act(async () => {
-      networkListener?.({ isConnected: false, isInternetReachable: false });
       networkListener?.({ isConnected: true, isInternetReachable: true });
       networkListener?.({ isConnected: true, isInternetReachable: true });
       await jest.advanceTimersByTimeAsync(2_000);
@@ -479,6 +482,52 @@ test('shows setup attention when a pending credential is no longer valid', async
       expect(screen.getByTestId('auth-state').props.children).toContain(
         'attention',
       ),
+    );
+  } finally {
+    await harness.db.close();
+  }
+});
+
+test('keeps connection-issue guidance when manual retry cannot revalidate offline', async () => {
+  const harness = await authHarness();
+  harness.tokenStore.getPending.mockResolvedValue('pending-token');
+  harness.synchronize.mockResolvedValueOnce({
+    status: 'skipped',
+    reason: 'offline',
+  });
+  jest
+    .spyOn(Network, 'addNetworkStateListener')
+    .mockReturnValue({ remove: jest.fn() });
+  try {
+    await renderApp(
+      <AuthProvider manager={harness.manager} tokenStore={harness.tokenStore}>
+        <AuthStateProbe />
+      </AuthProvider>,
+    );
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Test continue' }));
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId('auth-state').props.children).toContain(
+        'connection-issues',
+      ),
+    );
+    harness.api.getUser.mockRejectedValueOnce(
+      new NetworkError('Network request failed'),
+    );
+
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Test retry' }));
+    });
+    await waitFor(() =>
+      expect(harness.api.getUser).toHaveBeenCalledTimes(2),
+    );
+
+    expect(screen.getByTestId('auth-state').props.children).toContain(
+      'connection-issues',
+    );
+    expect(screen.getByTestId('auth-state').props.children).not.toContain(
+      '"status":"attention"',
     );
   } finally {
     await harness.db.close();
@@ -674,6 +723,11 @@ function AuthStateProbe() {
         accessibilityLabel="Test continue"
         accessibilityRole="button"
         onPress={() => void auth.continueInterruptedSetup()}
+      />
+      <Pressable
+        accessibilityLabel="Test retry"
+        accessibilityRole="button"
+        onPress={() => void auth.retryInitialSync()}
       />
     </>
   );

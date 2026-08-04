@@ -1,4 +1,3 @@
-import * as Network from 'expo-network';
 import { useEffect } from 'react';
 
 import type { Database } from '@/db/Database';
@@ -8,6 +7,7 @@ import type {
 } from '@/features/sync/SyncEngine';
 
 import { RetryCoordinator } from './RetryCoordinator';
+import { observeConnectivity } from './observeConnectivity';
 
 interface ConnectivityUploadRetryProps {
   readonly db: Database;
@@ -42,11 +42,8 @@ export function ConnectivityUploadRetry({
         }
       },
     });
-    const subscription = Network.addNetworkStateListener((network) => {
-      coordinator.updateConnectivity(
-        network.isConnected !== false &&
-          network.isInternetReachable !== false,
-      );
+    const subscription = observeConnectivity((connected) => {
+      coordinator.updateConnectivity(connected);
     });
     return () => {
       subscription.remove();

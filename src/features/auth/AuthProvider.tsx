@@ -1,10 +1,10 @@
 import type { WaniKaniApi } from '@/api/WaniKaniApi';
-import { ApiError } from '@/api/errors';
+import { ApiError, NetworkError } from '@/api/errors';
 import type { Resource, UserData } from '@/api/types';
 import type { Database } from '@/db/Database';
+import { observeConnectivity } from '@/features/connectivity/observeConnectivity';
 import { RetryCoordinator } from '@/features/connectivity/RetryCoordinator';
 import type { SyncEngine, SyncResult } from '@/features/sync/SyncEngine';
-import * as Network from 'expo-network';
 import {
   createContext,
   type PropsWithChildren,
@@ -357,12 +357,7 @@ export function AuthProvider({
           currentSetup !== null &&
           !(operationError instanceof InitialSyncError)
         ) {
-          setInitialSync({
-            status: 'attention',
-            phase: currentSetup.phase,
-            message: operationMessage,
-            retryAt: null,
-          });
+          setInitialSync(setupFailureFor(operationError, currentSetup.phase));
         }
         setRequiresAccountChange(
           operationError instanceof AccountChangeRequiredError,
@@ -391,11 +386,8 @@ export function AuthProvider({
     });
     coordinator.blockUntil(initialSyncRef.current?.retryAt ?? null);
     retryCoordinatorRef.current = coordinator;
-    const subscription = Network.addNetworkStateListener((network) => {
-      coordinator.updateConnectivity(
-        network.isConnected !== false &&
-          network.isInternetReachable !== false,
-      );
+    const subscription = observeConnectivity((connected) => {
+      coordinator.updateConnectivity(connected);
     });
     return () => {
       subscription.remove?.();
@@ -493,6 +485,24 @@ function runningInitialSync(phase: InitialSyncPhase): InitialSyncState {
     phase,
     message: null,
     retryAt: null,
+  };
+}
+
+function setupFailureFor(
+  error: unknown,
+  phase: InitialSyncPhase,
+): InitialSyncState {
+  const connectionIssue = error instanceof NetworkError;
+  return {
+    status: connectionIssue ? 'connection-issues' : 'attention',
+    phase,
+    message: connectionIssue
+      ? 'Taatoru could not reach WaniKani. It will continue when your connection returns.'
+      : messageFor(error),
+    retryAt:
+      error instanceof ApiError && error.retryAt !== null
+        ? error.retryAt.toISOString()
+        : null,
   };
 }
 

@@ -48,6 +48,19 @@ test('launches one quick sync for pending writes after a stable reconnect', asyn
   expect(harness.synchronize).toHaveBeenCalledWith('quick');
 });
 
+test('retries pending writes when the authenticated host mounts offline', async () => {
+  const harness = await renderRetry({
+    pending: true,
+    initialReachable: false,
+  });
+
+  await emitNetwork(harness.listener, true);
+  await jest.advanceTimersByTimeAsync(2_000);
+
+  expect(harness.synchronize).toHaveBeenCalledTimes(1);
+  expect(harness.synchronize).toHaveBeenCalledWith('quick');
+});
+
 test('honors server retry timing after a failed upload attempt', async () => {
   const harness = await renderRetry({
     pending: true,
@@ -86,9 +99,11 @@ test('cancels a scheduled retry when the authenticated host unmounts', async () 
 
 async function renderRetry({
   pending,
+  initialReachable = true,
   result = { status: 'completed' as const, updatedResources: 0 },
 }: {
   readonly pending: boolean;
+  readonly initialReachable?: boolean;
   readonly result?: React.ComponentProps<
     typeof ConnectivityUploadRetry
   >['synchronize'] extends (...args: never[]) => Promise<infer R>
@@ -99,6 +114,10 @@ async function renderRetry({
   const db = { first } as unknown as Database;
   const synchronize = jest.fn(async () => result);
   const remove = jest.fn();
+  jest.spyOn(Network, 'getNetworkStateAsync').mockResolvedValue({
+    isConnected: initialReachable,
+    isInternetReachable: initialReachable,
+  });
   const networkSpy = jest
     .spyOn(Network, 'addNetworkStateListener')
     .mockReturnValue({ remove });
