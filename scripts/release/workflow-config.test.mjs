@@ -41,3 +41,20 @@ test('EAS profiles keep versions local and publication internal', () => {
   assert.equal(eas.submit.production.android.track, 'internal');
   assert.equal(eas.submit.production.android.releaseStatus, 'completed');
 });
+
+test('EAS release builds require a version-tag push and cannot publish', () => {
+  const workflow = readYaml('.eas/workflows/build-android-release.yml');
+  assert.deepEqual(workflow.on.push.tags, ['v*']);
+  assert.equal(workflow.on.push.branches, undefined);
+  assert.equal(
+    workflow.jobs.validate.steps.some((step) =>
+      step.run?.includes('npm run validate:release --'),
+    ),
+    true,
+  );
+  assert.deepEqual(workflow.jobs.build_release_apk.needs, ['validate']);
+  assert.equal(workflow.jobs.build_release_apk.params.profile, 'release-apk');
+  assert.deepEqual(workflow.jobs.build_production_aab.needs, ['validate']);
+  assert.equal(workflow.jobs.build_production_aab.params.profile, 'production');
+  assert.equal(Object.values(workflow.jobs).some((job) => job.type === 'submit'), false);
+});
