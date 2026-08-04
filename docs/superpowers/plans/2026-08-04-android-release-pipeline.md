@@ -389,13 +389,13 @@ Create `eas.json`:
   },
   "build": {
     "development": {
-      "node": "22",
+      "node": "22.23.2",
       "developmentClient": true,
       "distribution": "internal",
       "environment": "development"
     },
     "preview": {
-      "node": "22",
+      "node": "22.23.2",
       "distribution": "internal",
       "environment": "preview",
       "android": {
@@ -403,7 +403,7 @@ Create `eas.json`:
       }
     },
     "production": {
-      "node": "22",
+      "node": "22.23.2",
       "distribution": "store",
       "environment": "production",
       "autoIncrement": false,
@@ -501,7 +501,7 @@ on:
 
 defaults:
   tools:
-    node: '22'
+    node: '22.23.2'
 
 concurrency:
   cancel_in_progress: true
