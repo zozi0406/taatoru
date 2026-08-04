@@ -30,6 +30,7 @@ const config: ExpoConfig = {
   plugins: [
     'expo-router',
     'expo-background-task',
+    'expo-asset',
     [
       'expo-audio',
       {
