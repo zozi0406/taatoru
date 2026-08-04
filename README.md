@@ -2,21 +2,17 @@
 
 Taatoru is a working-title Android-first Expo client for WaniKani. It is being
 built as a local-first application with lessons, reviews, search, analytics,
-notifications, and synchronization behavior characterized against Tsurukame.
+notifications, and synchronization behavior characterized against
+[Tsurukame](https://github.com/davidsansome/tsurukame).
 
 ## Development
 
-Use Node.js 22 LTS:
+Taatoru builds with Node.js 22 LTS only:
 
 ```sh
 npm install
 npm run android
 ```
-
-The supported release toolchain remains Node 22 (`.nvmrc` and
-`package.json`). Foundation development through the authentication milestone
-was also run successfully with Node 26.5.0; that newer runtime is convenient
-for local work but is not yet the release or CI baseline.
 
 The generated `android/` and `ios/` projects are intentionally untracked.
 
