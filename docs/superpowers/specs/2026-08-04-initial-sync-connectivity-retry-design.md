@@ -17,6 +17,7 @@ This change adds:
 
 - a dedicated initial-sync state after token validation;
 - a modern animated tracker backed by real synchronization phases;
+- an interrupted-setup recovery dialog on a later app launch;
 - recoverable connection-issue and other failure states;
 - automatic initial-sync continuation after connectivity returns; and
 - a connectivity-triggered quick sync when durable pending uploads exist.
@@ -56,6 +57,40 @@ The screen is scrollable and safe for narrow displays, large text, and system
 insets. Status text uses an accessibility live region. State is never conveyed
 through color or animation alone.
 
+## Interrupted Setup Recovery
+
+After WaniKani validates a token and before the first synchronization starts,
+Taatoru stores it under a separate pending-setup key in SecureStore. This key
+does not authenticate the user or grant access to the protected app. Successful
+initial synchronization promotes it to the active-token key and removes the
+pending key.
+
+If Taatoru launches with a pending setup token and no completed initial-sync
+marker, it treats the previous setup as interrupted. It does not automatically
+continue or make an API request. Instead, an accessible dialog titled `Setup
+was interrupted` explains that the incomplete local download may be stale and
+asks how to proceed.
+
+The dialog offers:
+
+- `Continue syncing`: atomically clears all partially downloaded account data
+  and synchronization cursors while preserving app preferences, retains the
+  pending token in SecureStore, closes the dialog, and begins a fresh initial
+  sync through the guarded retry path; and
+- `Use another API key`: atomically clears the partial account data and
+  synchronization cursors, removes the pending token, and returns to the token
+  onboarding form with an empty field.
+
+The destructive scope is limited to incomplete account cache data. It does not
+reset theme or study preferences. During first-time setup there can be no valid
+pending lesson/review uploads or active sessions for that incomplete account;
+the same account-data clear nevertheless removes those tables so no partial
+state can cross into the restarted generation.
+
+Repeated app launches continue to show the choice until the user selects an
+action. Connectivity callbacks are ignored while the dialog is awaiting a
+decision, so reopening the app cannot silently start requests.
+
 ## Connection and Error States
 
 If initial synchronization cannot proceed because the device is offline or a
@@ -68,17 +103,19 @@ The screen offers:
 
 - `Retry now`, which uses the same guarded retry path as automatic recovery;
   and
-- `Use a different token`, which returns to the connection form and clears the
-  in-memory pending credential and initial-sync presentation state.
+- `Use a different token`, which clears incomplete account data and cursors,
+  removes the pending SecureStore credential, and returns to the connection
+  form.
 
 Non-connectivity failures use `Setup needs attention`, preserve a safe error
 message, and expose the same actions. Rate-limited responses show their safe
 retry timing and do not retry before the server-provided time.
 
-The token remains only in the masked input/in-memory authentication flow until
-initial synchronization succeeds. It is not placed in navigation parameters,
-ordinary storage, logs, analytics, or error messages. The existing token is
-stored in SecureStore only after successful initial synchronization.
+The token remains only in the masked input/in-memory authentication flow and
+the dedicated pending SecureStore key until initial synchronization succeeds.
+It is not placed in navigation parameters, ordinary storage, logs, analytics,
+or error messages. The active-token SecureStore key is written only after
+successful initial synchronization.
 
 ## Retry Coordination and Request Control
 
@@ -133,9 +170,10 @@ events. The authentication manager subscribes to the engine used for initial
 sync and reports a small semantic setup-progress model to `AuthProvider`.
 Presentation consumes that model without knowing API or database details.
 
-The authentication context retains the pending token only in memory while
-setup is incomplete. It owns retry/reset actions so the setup component cannot
-bypass validation or synchronization checks.
+The authentication context and token store distinguish pending setup from an
+active authenticated credential. The context owns interrupted-setup decisions,
+retry, and reset actions so presentation cannot bypass cache clearing,
+validation, or synchronization checks.
 
 A small connectivity retry coordinator owns edge detection, debounce,
 single-flight behavior, cooldown, and `retryAt` enforcement. It is independent
@@ -148,9 +186,11 @@ for reconnect events.
 
 ## Failure and Lifecycle Behavior
 
-- Killing the app during initial synchronization leaves the token unstored and
-  returns the user to connection onboarding on the next launch. Any committed
-  partial cache remains available to accelerate the next attempt.
+- Killing the app during initial synchronization leaves a pending setup token
+  in SecureStore. On the next launch Taatoru shows the interrupted-setup dialog
+  and makes no request until the user chooses. Continuing clears the incomplete
+  cache and restarts from empty cursors; choosing another key clears the cache
+  and pending credential.
 - Killing the app during a reconnect upload leaves unacknowledged queue rows in
   SQLite. Existing retry and stale-write reconciliation behavior applies on the
   next attempt.
@@ -167,8 +207,13 @@ Test-first coverage will verify:
 - completed, active, connection-issue, attention, and reduced-motion states
   remain understandable and accessible;
 - Retry now and automatic reconnect use the same single-flight path;
-- Use a different token returns to the form without persisting the pending
-  token;
+- Use a different token clears incomplete account state and returns to the form
+  without retaining the pending token;
+- reopening with a pending setup token and no completed-sync marker shows the
+  interrupted-setup dialog without making an API request;
+- Continue syncing clears every partial account table and cursor before the
+  first restarted request;
+- Use another API key clears the partial cache and pending SecureStore key;
 - repeated online callbacks produce one attempt;
 - flapping connectivity is debounced and cooldown-limited;
 - callbacks during an in-flight attempt do not queue another attempt;
@@ -181,6 +226,7 @@ Test-first coverage will verify:
 Focused Jest tests will run during development, followed by lint, TypeScript
 checking, and the full Jest suite. Android verification will cover the initial
 sync transition, animation, connection loss and recovery, repeated Retry taps,
-dark theme, large text, reduced motion where practical, and a queued offline
-completion uploading once when connectivity returns. A production Android
-bundle export will provide the final build-level check.
+process termination and interrupted-setup recovery, dark theme, large text,
+reduced motion where practical, and a queued offline completion uploading once
+when connectivity returns. A production Android bundle export will provide the
+final build-level check.
