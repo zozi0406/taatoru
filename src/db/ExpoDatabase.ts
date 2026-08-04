@@ -43,6 +43,7 @@ class ExpoExecutor implements DatabaseTransaction {
 
 export class ExpoDatabase implements Database {
   private readonly executor: ExpoExecutor;
+  private operationTail: Promise<void> = Promise.resolve();
 
   private constructor(private readonly database: SQLite.SQLiteDatabase) {
     this.executor = new ExpoExecutor(database);
@@ -60,40 +61,53 @@ export class ExpoDatabase implements Database {
     sql: string,
     params: readonly SqlValue[] = [],
   ): Promise<RunResult> {
-    return this.executor.run(sql, params);
+    return this.enqueue(() => this.executor.run(sql, params));
   }
 
   first<T>(
     sql: string,
     params: readonly SqlValue[] = [],
   ): Promise<T | null> {
-    return this.executor.first<T>(sql, params);
+    return this.enqueue(() => this.executor.first<T>(sql, params));
   }
 
   all<T>(
     sql: string,
     params: readonly SqlValue[] = [],
   ): Promise<readonly T[]> {
-    return this.executor.all<T>(sql, params);
+    return this.enqueue(() => this.executor.all<T>(sql, params));
   }
 
-  async transaction<T>(
+  transaction<T>(
     operation: (tx: DatabaseTransaction) => Promise<T>,
   ): Promise<T> {
-    let completed = false;
-    let result: T | undefined;
-    await this.database.withExclusiveTransactionAsync(async (transaction) => {
-      result = await operation(new ExpoExecutor(transaction));
-      completed = true;
-    });
+    return this.enqueue(async () => {
+      let completed = false;
+      let result: T | undefined;
+      await this.database.withExclusiveTransactionAsync(
+        async (transaction) => {
+          result = await operation(new ExpoExecutor(transaction));
+          completed = true;
+        },
+      );
 
-    if (!completed) {
-      throw new Error('SQLite transaction completed without a result');
-    }
-    return result as T;
+      if (!completed) {
+        throw new Error('SQLite transaction completed without a result');
+      }
+      return result as T;
+    });
   }
 
   close(): Promise<void> {
-    return this.database.closeAsync();
+    return this.enqueue(() => this.database.closeAsync());
+  }
+
+  private enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.operationTail.then(operation, operation);
+    this.operationTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
 }

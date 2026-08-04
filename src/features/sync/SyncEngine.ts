@@ -161,14 +161,73 @@ export class SynchronizationEngine implements SyncEngine {
       ]);
 
       this.setPhase('phase-two');
-      const phaseTwoCounts = await allOrThrow([
-        this.fetchAssignments(state),
-        this.fetchStudyMaterials(state),
-        this.fetchUser(),
-        this.fetchLevelProgressions(),
-        this.fetchVoiceActors(state),
-        this.fetchReviewStatistics(state),
-      ]);
+      const resources = await Promise.allSettled([
+        this.options.api.getAssignments(state.cursors.assignments),
+        this.options.api.getStudyMaterials(state.cursors.studyMaterials),
+        this.options.api.getUser(),
+        this.options.api.getLevelProgressions(),
+        this.options.api.getVoiceActors(state.cursors.voiceActors),
+        this.options.api.getReviewStatistics(
+          state.cursors.reviewStatistics,
+        ),
+      ] as const);
+      const failures: unknown[] = [];
+      const store = async <T>(
+        result: PromiseSettledResult<T>,
+        operation: (value: T) => Promise<number>,
+      ): Promise<number> => {
+        if (result.status === 'rejected') {
+          failures.push(result.reason);
+          return 0;
+        }
+        try {
+          return await operation(result.value);
+        } catch (error) {
+          failures.push(error);
+          return 0;
+        }
+      };
+      const phaseTwoCounts = [
+        await store(resources[0], async (page) => {
+          await this.options.repository.replaceAssignments(
+            page.data,
+            page.data_updated_at,
+          );
+          return page.data.length;
+        }),
+        await store(resources[1], async (page) => {
+          await this.options.repository.replaceStudyMaterials(
+            page.data,
+            page.data_updated_at,
+          );
+          return page.data.length;
+        }),
+        await store(resources[2], async (resource) => {
+          await this.options.repository.replaceUser(resource);
+          return 1;
+        }),
+        await store(resources[3], async (page) => {
+          await this.options.repository.replaceLevelProgressions(page.data);
+          return page.data.length;
+        }),
+        await store(resources[4], async (page) => {
+          await this.options.repository.replaceVoiceActors(
+            page.data,
+            page.data_updated_at,
+          );
+          return page.data.length;
+        }),
+        await store(resources[5], async (page) => {
+          await this.options.repository.replaceReviewStatistics(
+            page.data,
+            page.data_updated_at,
+          );
+          return page.data.length;
+        }),
+      ];
+      if (failures.length > 0) {
+        throw failures[0];
+      }
       return (
         subjectCount +
         phaseTwoCounts.reduce((total, count) => total + count, 0)
@@ -195,66 +254,6 @@ export class SynchronizationEngine implements SyncEngine {
       progressIds: state.progressIds,
       studyMaterialIds: state.studyMaterialIds,
     });
-  }
-
-  private async fetchAssignments(state: SyncStateSnapshot): Promise<number> {
-    const page = await this.options.api.getAssignments(
-      state.cursors.assignments,
-    );
-    await this.options.repository.replaceAssignments(
-      page.data,
-      page.data_updated_at,
-    );
-    return page.data.length;
-  }
-
-  private async fetchStudyMaterials(
-    state: SyncStateSnapshot,
-  ): Promise<number> {
-    const page = await this.options.api.getStudyMaterials(
-      state.cursors.studyMaterials,
-    );
-    await this.options.repository.replaceStudyMaterials(
-      page.data,
-      page.data_updated_at,
-    );
-    return page.data.length;
-  }
-
-  private async fetchUser(): Promise<number> {
-    const resource = await this.options.api.getUser();
-    await this.options.repository.replaceUser(resource);
-    return 1;
-  }
-
-  private async fetchLevelProgressions(): Promise<number> {
-    const page = await this.options.api.getLevelProgressions();
-    await this.options.repository.replaceLevelProgressions(page.data);
-    return page.data.length;
-  }
-
-  private async fetchVoiceActors(state: SyncStateSnapshot): Promise<number> {
-    const page = await this.options.api.getVoiceActors(
-      state.cursors.voiceActors,
-    );
-    await this.options.repository.replaceVoiceActors(
-      page.data,
-      page.data_updated_at,
-    );
-    return page.data.length;
-  }
-
-  private async fetchReviewStatistics(
-    state: SyncStateSnapshot,
-  ): Promise<number> {
-    const page = await this.options.api.getReviewStatistics(
-      state.cursors.reviewStatistics,
-    );
-    await this.options.repository.replaceReviewStatistics(
-      page.data,
-      page.data_updated_at,
-    );
-    return page.data.length;
   }
 
   private setPhase(phase: SyncPhase): void {

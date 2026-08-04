@@ -172,6 +172,41 @@ test('phase-two resources commit independently when a sibling fails', async () =
   expect(repository.replaceReviewStatistics).toHaveBeenCalledTimes(1);
 });
 
+test('does not overlap repository writes in phase two', async () => {
+  const repository = syncRepository();
+  let writeInProgress = false;
+  const exclusiveWrite = jest.fn(
+    async (..._args: readonly unknown[]): Promise<undefined> => {
+      if (writeInProgress) {
+        throw new Error('database is locked');
+      }
+      writeInProgress = true;
+      await Promise.resolve();
+      writeInProgress = false;
+      return undefined;
+    },
+  );
+  repository.replaceAssignments.mockImplementation(exclusiveWrite);
+  repository.replaceStudyMaterials.mockImplementation(exclusiveWrite);
+  repository.replaceUser.mockImplementation(exclusiveWrite);
+  repository.replaceLevelProgressions.mockImplementation(exclusiveWrite);
+  repository.replaceVoiceActors.mockImplementation(exclusiveWrite);
+  repository.replaceReviewStatistics.mockImplementation(exclusiveWrite);
+  const engine = new SynchronizationEngine({
+    api: eventApi([]),
+    repository,
+    pendingWrites: eventPendingWrites([]),
+    isOnline: async () => true,
+    invalidate: jest.fn(),
+    updateNotifications: jest.fn(),
+    now: () => NOW,
+  });
+
+  await expect(engine.synchronize('quick')).resolves.toMatchObject({
+    status: 'completed',
+  });
+});
+
 test('full synchronization clears before fetching and restores recent mistakes', async () => {
   const events: string[] = [];
   const api = eventApi(events);
