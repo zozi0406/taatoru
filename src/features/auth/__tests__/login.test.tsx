@@ -2,8 +2,11 @@ import {
   act,
   fireEvent,
   screen,
+  waitFor,
 } from '@testing-library/react-native';
 import * as Linking from 'expo-linking';
+import * as Network from 'expo-network';
+import { Pressable, Text } from 'react-native';
 
 import type { WaniKaniApi } from '@/api/WaniKaniApi';
 import { ApiError } from '@/api/errors';
@@ -13,14 +16,18 @@ import { NodeTestDatabase } from '@/db/NodeTestDatabase';
 import { ResourceRepository } from '@/db/repositories/ResourceRepository';
 import type { SyncResult } from '@/features/sync/SyncEngine';
 import { SyncRepository } from '@/features/sync/SyncRepository';
+import { createSyncStore } from '@/features/sync/syncStore';
 import { userFixture } from '@/fixtures/api';
 import { renderApp } from '@/test/render';
 import { ThemeProvider } from '@/ui/theme/ThemeProvider';
 import {
   AccountChangeRequiredError,
   AuthManager,
+  AuthProvider,
   EmptyTokenError,
+  InitialSyncError,
   InvalidTokenError,
+  useAuth,
 } from '../AuthProvider';
 import { LoginScreen } from '../LoginScreen';
 import type { TokenStore } from '../tokenStore';
@@ -50,7 +57,17 @@ test('validates, persists, and starts the first quick sync', async () => {
     );
     expect(harness.apiFactory).toHaveBeenCalledWith('wk-token');
     expect(harness.api.getUser).toHaveBeenCalledTimes(1);
+    expect(harness.tokenStore.setPending).toHaveBeenCalledWith('wk-token');
     expect(harness.tokenStore.set).toHaveBeenCalledWith('wk-token');
+    expect(harness.tokenStore.removePending).toHaveBeenCalledTimes(1);
+    expect(
+      harness.tokenStore.setPending.mock.invocationCallOrder[0],
+    ).toBeLessThan(harness.synchronize.mock.invocationCallOrder[0]!);
+    expect(
+      harness.tokenStore.set.mock.invocationCallOrder[0],
+    ).toBeLessThan(
+      harness.tokenStore.removePending.mock.invocationCallOrder[0]!,
+    );
     expect(harness.synchronize).toHaveBeenCalledWith('quick');
   } finally {
     await harness.db.close();
@@ -74,7 +91,9 @@ test('does not authenticate or persist a token when the required initial sync fa
     await expect(
       harness.manager.login('new-token'),
     ).rejects.toThrow('initial WaniKani sync');
+    expect(harness.tokenStore.setPending).toHaveBeenCalledWith('new-token');
     expect(harness.tokenStore.set).not.toHaveBeenCalled();
+    expect(harness.tokenStore.removePending).not.toHaveBeenCalled();
     await expect(
       harness.db.first('SELECT id FROM user LIMIT 1'),
     ).resolves.toBeNull();
@@ -166,6 +185,7 @@ test('does not persist an invalid token', async () => {
       InvalidTokenError,
     );
     expect(harness.tokenStore.set).not.toHaveBeenCalled();
+    expect(harness.tokenStore.setPending).not.toHaveBeenCalled();
     expect(harness.synchronize).not.toHaveBeenCalled();
   } finally {
     await harness.db.close();
@@ -208,6 +228,258 @@ test('a different account requires explicit replacement before pending data is c
     await expect(pendingCount(harness.db)).resolves.toBe(0);
     expect(harness.tokenStore.set).toHaveBeenCalledWith('other-token');
     expect(harness.synchronize).toHaveBeenCalledWith('quick');
+  } finally {
+    await harness.db.close();
+  }
+});
+
+test('exposes interrupted setup without making a request on launch', async () => {
+  const harness = await authHarness();
+  harness.tokenStore.getPending.mockResolvedValueOnce('pending-token');
+  const addNetworkListener = jest.spyOn(Network, 'addNetworkStateListener');
+  try {
+    await renderApp(
+      <AuthProvider manager={harness.manager} tokenStore={harness.tokenStore}>
+        <AuthStateProbe />
+      </AuthProvider>,
+    );
+
+    expect(
+      (await screen.findByTestId('auth-state')).props.children,
+    ).toContain('"status":"interrupted"');
+    expect(harness.apiFactory).not.toHaveBeenCalled();
+    expect(harness.synchronize).not.toHaveBeenCalled();
+    expect(addNetworkListener).not.toHaveBeenCalled();
+  } finally {
+    await harness.db.close();
+  }
+});
+
+test('restarts interrupted setup after clearing the incomplete cache', async () => {
+  const harness = await authHarness();
+  harness.tokenStore.getPending.mockResolvedValue('pending-token');
+  await new ResourceRepository(harness.db).replaceUser(userFixture);
+  await harness.db.run(
+    "INSERT INTO settings (key, value) VALUES ('theme', 'dark')",
+  );
+  harness.synchronize.mockImplementationOnce(async () => {
+    const state = await new SyncRepository(harness.db).getStateSnapshot();
+    expect(Object.values(state.cursors)).toEqual([
+      null,
+      null,
+      null,
+      null,
+      null,
+    ]);
+    await new ResourceRepository(harness.db).replaceUser(userFixture);
+    await new SyncRepository(harness.db).markSyncCompleted(
+      'quick',
+      new Date('2026-08-04T12:00:00.000Z'),
+    );
+    return { status: 'completed', updatedResources: 1 };
+  });
+  try {
+    await expect(
+      harness.manager.continueInterruptedSetup(),
+    ).resolves.toEqual(userFixture);
+
+    expect(
+      harness.clearAccount.mock.invocationCallOrder[0],
+    ).toBeLessThan(harness.api.getUser.mock.invocationCallOrder[0]!);
+    await expect(
+      harness.db.first('SELECT value FROM settings WHERE key = ?', ['theme']),
+    ).resolves.toEqual({ value: 'dark' });
+  } finally {
+    await harness.db.close();
+  }
+});
+
+test('using another API key clears partial data and the pending credential', async () => {
+  const harness = await authHarness();
+  await new ResourceRepository(harness.db).replaceUser(userFixture);
+  await harness.db.run(
+    "INSERT INTO settings (key, value) VALUES ('theme', 'dark')",
+  );
+  try {
+    await harness.manager.useAnotherApiKey();
+
+    expect(harness.apiFactory).not.toHaveBeenCalled();
+    expect(
+      harness.clearAccount.mock.invocationCallOrder[0],
+    ).toBeLessThan(
+      harness.tokenStore.removePending.mock.invocationCallOrder[0]!,
+    );
+    await expect(
+      harness.db.first('SELECT id FROM user LIMIT 1'),
+    ).resolves.toBeNull();
+    await expect(
+      harness.db.first('SELECT value FROM settings WHERE key = ?', ['theme']),
+    ).resolves.toEqual({ value: 'dark' });
+  } finally {
+    await harness.db.close();
+  }
+});
+
+test('reports real synchronization phases during initial setup', async () => {
+  const harness = await authHarness();
+  const report = jest.fn();
+  harness.synchronize.mockImplementationOnce(async () => {
+    harness.syncStore.setState({ isSyncing: true, phase: 'phase-one' });
+    harness.syncStore.setState({ isSyncing: true, phase: 'phase-two' });
+    await new ResourceRepository(harness.db).replaceUser(userFixture);
+    await new SyncRepository(harness.db).markSyncCompleted(
+      'quick',
+      new Date('2026-08-04T12:00:00.000Z'),
+    );
+    harness.syncStore.setState({ isSyncing: true, phase: 'finalizing' });
+    return { status: 'completed', updatedResources: 1 };
+  });
+  try {
+    await harness.manager.login('new-token', report);
+
+    expect(report.mock.calls.map(([state]) => state.phase)).toEqual(
+      expect.arrayContaining([
+        'account-connected',
+        'subjects',
+        'account-data',
+        'offline-library',
+      ]),
+    );
+  } finally {
+    await harness.db.close();
+  }
+});
+
+test.each([
+  [
+    'offline',
+    { status: 'skipped', reason: 'offline' } as const,
+    'connection-issues',
+    null,
+  ],
+  [
+    'network',
+    {
+      status: 'failed',
+      error: {
+        kind: 'network',
+        message: 'Could not reach WaniKani',
+        status: null,
+        safeUrl: null,
+        retryAt: null,
+        hibernating: false,
+      },
+    } as const,
+    'connection-issues',
+    null,
+  ],
+  [
+    'rate limited API',
+    {
+      status: 'failed',
+      error: {
+        kind: 'api',
+        message: 'Try later',
+        status: 429,
+        safeUrl: null,
+        retryAt: '2026-08-04T12:01:00.000Z',
+        hibernating: false,
+      },
+    } as const,
+    'attention',
+    '2026-08-04T12:01:00.000Z',
+  ],
+])('classifies %s initial-sync failure safely', async (
+  _label,
+  result,
+  expectedStatus,
+  retryAt,
+) => {
+  const harness = await authHarness();
+  const report = jest.fn();
+  harness.synchronize.mockResolvedValueOnce(result);
+  try {
+    const failure = await harness.manager
+      .login('new-token', report)
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(InitialSyncError);
+    expect(failure).toMatchObject({ retryAt });
+    expect(report).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: expectedStatus, retryAt }),
+    );
+  } finally {
+    await harness.db.close();
+  }
+});
+
+test('retries initial sync once after a stable reconnect', async () => {
+  const harness = await authHarness();
+  harness.tokenStore.getPending.mockResolvedValue('pending-token');
+  harness.synchronize.mockResolvedValueOnce({
+    status: 'skipped',
+    reason: 'offline',
+  });
+  let networkListener: ((state: Network.NetworkState) => void) | null = null;
+  jest
+    .spyOn(Network, 'addNetworkStateListener')
+    .mockImplementation((listener) => {
+      networkListener = listener;
+      return { remove: jest.fn() };
+    });
+  try {
+    await renderApp(
+      <AuthProvider manager={harness.manager} tokenStore={harness.tokenStore}>
+        <AuthStateProbe />
+      </AuthProvider>,
+    );
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Test continue' }));
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId('auth-state').props.children).toContain(
+        'connection-issues',
+      ),
+    );
+    expect(networkListener).not.toBeNull();
+
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-08-04T12:00:00.000Z'));
+    await act(async () => {
+      networkListener?.({ isConnected: false, isInternetReachable: false });
+      networkListener?.({ isConnected: true, isInternetReachable: true });
+      networkListener?.({ isConnected: true, isInternetReachable: true });
+      await jest.advanceTimersByTimeAsync(2_000);
+    });
+
+    expect(harness.synchronize).toHaveBeenCalledTimes(2);
+  } finally {
+    jest.useRealTimers();
+    await harness.db.close();
+  }
+});
+
+test('shows setup attention when a pending credential is no longer valid', async () => {
+  const harness = await authHarness();
+  harness.tokenStore.getPending.mockResolvedValue('revoked-token');
+  harness.api.getUser.mockRejectedValueOnce(
+    new ApiError('Unauthorized', { status: 401 }),
+  );
+  try {
+    await renderApp(
+      <AuthProvider manager={harness.manager} tokenStore={harness.tokenStore}>
+        <AuthStateProbe />
+      </AuthProvider>,
+    );
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Test continue' }));
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('auth-state').props.children).toContain(
+        'attention',
+      ),
+    );
   } finally {
     await harness.db.close();
   }
@@ -330,9 +602,12 @@ async function authHarness(user = userFixture) {
   const db = await NodeTestDatabase.open();
   await migrateDatabase(db);
   const tokenStore = {
-    get: jest.fn(async () => null),
+    get: jest.fn<Promise<string | null>, []>(async () => null),
     set: jest.fn(async (_token: string) => undefined),
     remove: jest.fn(async () => undefined),
+    getPending: jest.fn<Promise<string | null>, []>(async () => null),
+    setPending: jest.fn(async (_token: string) => undefined),
+    removePending: jest.fn(async () => undefined),
   } satisfies jest.Mocked<TokenStore>;
   const api = {
     getUser: jest.fn(async () => user),
@@ -340,6 +615,7 @@ async function authHarness(user = userFixture) {
     getUser: jest.MockedFunction<WaniKaniApi['getUser']>;
   };
   const apiFactory = jest.fn(() => api);
+  const syncStore = createSyncStore();
   const synchronize = jest.fn<Promise<SyncResult>, []>(async () => {
     await new ResourceRepository(db).replaceUser(user);
     await new SyncRepository(db).markSyncCompleted(
@@ -358,7 +634,7 @@ async function authHarness(user = userFixture) {
     db,
     tokenStore,
     apiFactory,
-    syncFactory: () => ({ synchronize }),
+    syncFactory: () => ({ store: syncStore, synchronize }),
     clearAccount,
   });
   return {
@@ -368,6 +644,7 @@ async function authHarness(user = userFixture) {
     db,
     manager,
     synchronize,
+    syncStore,
     tokenStore,
   };
 }
@@ -386,4 +663,18 @@ async function pendingCount(db: NodeTestDatabase): Promise<number> {
       'SELECT COUNT(*) AS count FROM pending_progress',
     )
   )?.count ?? 0;
+}
+
+function AuthStateProbe() {
+  const auth = useAuth();
+  return (
+    <>
+      <Text testID="auth-state">{JSON.stringify(auth)}</Text>
+      <Pressable
+        accessibilityLabel="Test continue"
+        accessibilityRole="button"
+        onPress={() => void auth.continueInterruptedSetup()}
+      />
+    </>
+  );
 }

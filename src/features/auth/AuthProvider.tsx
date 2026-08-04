@@ -2,7 +2,9 @@ import type { WaniKaniApi } from '@/api/WaniKaniApi';
 import { ApiError } from '@/api/errors';
 import type { Resource, UserData } from '@/api/types';
 import type { Database } from '@/db/Database';
-import type { SyncEngine } from '@/features/sync/SyncEngine';
+import { RetryCoordinator } from '@/features/connectivity/RetryCoordinator';
+import type { SyncEngine, SyncResult } from '@/features/sync/SyncEngine';
+import * as Network from 'expo-network';
 import {
   createContext,
   type PropsWithChildren,
@@ -10,6 +12,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import type { TokenStore } from './tokenStore';
@@ -38,10 +41,12 @@ export class AccountChangeRequiredError extends Error {
 }
 
 export class InitialSyncError extends Error {
-  constructor() {
-    super(
-      'The initial WaniKani sync did not complete. Check your connection and try again.',
-    );
+  constructor(
+    readonly setupStatus: 'connection-issues' | 'attention',
+    message: string,
+    readonly retryAt: string | null,
+  ) {
+    super(`The initial WaniKani sync did not complete. ${message}`);
     this.name = 'InitialSyncError';
   }
 }
@@ -64,10 +69,15 @@ interface CachedAccount {
   readonly user: Resource<UserData, 'user'>;
 }
 
+type InitialSyncReporter = (state: InitialSyncState) => void;
+
 export class AuthManager {
   constructor(private readonly options: AuthManagerOptions) {}
 
-  async login(tokenValue: string): Promise<Resource<UserData, 'user'>> {
+  async login(
+    tokenValue: string,
+    report?: InitialSyncReporter,
+  ): Promise<Resource<UserData, 'user'>> {
     const { token, api, user } = await this.validate(tokenValue);
     const cached = await this.cachedAccount();
     if (cached !== null && cached.user.data.id !== user.data.id) {
@@ -75,22 +85,29 @@ export class AuthManager {
     }
 
     if (cached === null || !cached.synchronized) {
-      await this.initialSync(api, user.data.id);
+      report?.(runningInitialSync('account-connected'));
+      await this.options.tokenStore.setPending(token);
+      await this.initialSync(api, user.data.id, report);
     } else {
       await this.opportunisticSync(api);
     }
     await this.options.tokenStore.set(token);
+    await this.options.tokenStore.removePending();
     return user;
   }
 
   async changeAccount(
     tokenValue: string,
+    report?: InitialSyncReporter,
   ): Promise<Resource<UserData, 'user'>> {
     const { token, api, user } = await this.validate(tokenValue);
     await this.options.clearAccount();
     await this.options.tokenStore.remove();
-    await this.initialSync(api, user.data.id);
+    await this.options.tokenStore.setPending(token);
+    report?.(runningInitialSync('account-connected'));
+    await this.initialSync(api, user.data.id, report);
     await this.options.tokenStore.set(token);
+    await this.options.tokenStore.removePending();
     return user;
   }
 
@@ -112,9 +129,36 @@ export class AuthManager {
     return cached.user;
   }
 
+  async continueInterruptedSetup(
+    report?: InitialSyncReporter,
+  ): Promise<Resource<UserData, 'user'>> {
+    const token = await this.pendingToken();
+    await this.options.clearAccount();
+    return this.login(token, report);
+  }
+
+  async retryPendingSetup(
+    report?: InitialSyncReporter,
+  ): Promise<Resource<UserData, 'user'>> {
+    return this.login(await this.pendingToken(), report);
+  }
+
+  async useAnotherApiKey(): Promise<void> {
+    await this.options.clearAccount();
+    await this.options.tokenStore.remove();
+    await this.options.tokenStore.removePending();
+  }
+
   async logout(): Promise<void> {
     await this.options.tokenStore.remove();
+    await this.options.tokenStore.removePending();
     await this.options.clearAccount();
+  }
+
+  private async pendingToken(): Promise<string> {
+    const token = await this.options.tokenStore.getPending();
+    if (token === null) throw new EmptyTokenError();
+    return token;
   }
 
   private async validate(tokenValue: string) {
@@ -138,15 +182,28 @@ export class AuthManager {
   private async initialSync(
     api: WaniKaniApi,
     expectedUserId: string,
+    report?: InitialSyncReporter,
   ): Promise<void> {
-    const result = await this.options.syncFactory(api).synchronize('quick');
+    const engine = this.options.syncFactory(api);
+    const unsubscribe = engine.store?.subscribe(({ phase }) => {
+      const setupPhase = setupPhaseFor(phase);
+      if (setupPhase !== null) report?.(runningInitialSync(setupPhase));
+    });
+    let result: SyncResult;
+    try {
+      result = await engine.synchronize('quick');
+    } finally {
+      unsubscribe?.();
+    }
     const cached = await this.cachedAccount();
     if (
       result.status !== 'completed' ||
       cached?.user.data.id !== expectedUserId ||
       !cached.synchronized
     ) {
-      throw new InitialSyncError();
+      const failure = initialSyncFailure(result);
+      report?.(failure.state);
+      throw failure.error;
     }
   }
 
@@ -181,13 +238,34 @@ export type AuthStatus =
   | 'authenticated'
   | 'unauthenticated';
 
+export type InitialSyncPhase =
+  | 'account-connected'
+  | 'subjects'
+  | 'account-data'
+  | 'offline-library';
+
+export interface InitialSyncState {
+  readonly status:
+    | 'running'
+    | 'connection-issues'
+    | 'attention'
+    | 'interrupted';
+  readonly phase: InitialSyncPhase;
+  readonly message: string | null;
+  readonly retryAt: string | null;
+}
+
 interface AuthContextValue {
   readonly status: AuthStatus;
   readonly busy: boolean;
   readonly error: string | null;
   readonly requiresAccountChange: boolean;
+  readonly initialSync: InitialSyncState | null;
   login(token: string): Promise<void>;
   changeAccount(token: string): Promise<void>;
+  retryInitialSync(): Promise<void>;
+  continueInterruptedSetup(): Promise<void>;
+  useAnotherApiKey(): Promise<void>;
   logout(): Promise<void>;
 }
 
@@ -208,6 +286,17 @@ export function AuthProvider({
   const [error, setError] = useState<string | null>(null);
   const [requiresAccountChange, setRequiresAccountChange] =
     useState(false);
+  const [initialSync, setInitialSync] =
+    useState<InitialSyncState | null>(null);
+  const initialSyncRef = useRef<InitialSyncState | null>(null);
+  const retryCoordinatorRef = useRef<RetryCoordinator | null>(null);
+  const reportInitialSync = useCallback(
+    (state: InitialSyncState) => setInitialSync(state),
+    [],
+  );
+  useEffect(() => {
+    initialSyncRef.current = initialSync;
+  }, [initialSync]);
 
   useEffect(() => {
     let active = true;
@@ -215,11 +304,25 @@ export function AuthProvider({
       try {
         const token = await tokenStore.get();
         if (token === null) {
-          if (active) setStatus('unauthenticated');
+          const pendingToken = await tokenStore.getPending();
+          if (active) {
+            if (pendingToken !== null) {
+              setInitialSync({
+                status: 'interrupted',
+                phase: 'account-connected',
+                message: null,
+                retryAt: null,
+              });
+            }
+            setStatus('unauthenticated');
+          }
           return;
         }
         await manager.resume(token);
-        if (active) setStatus('authenticated');
+        if (active) {
+          await tokenStore.removePending();
+          setStatus('authenticated');
+        }
       } catch (resumeError) {
         if (active) {
           setError(messageFor(resumeError));
@@ -244,9 +347,23 @@ export function AuthProvider({
       setRequiresAccountChange(false);
       try {
         await operation();
+        setInitialSync(null);
         setStatus('authenticated');
       } catch (operationError) {
-        setError(messageFor(operationError));
+        const operationMessage = messageFor(operationError);
+        setError(operationMessage);
+        const currentSetup = initialSyncRef.current;
+        if (
+          currentSetup !== null &&
+          !(operationError instanceof InitialSyncError)
+        ) {
+          setInitialSync({
+            status: 'attention',
+            phase: currentSetup.phase,
+            message: operationMessage,
+            retryAt: null,
+          });
+        }
         setRequiresAccountChange(
           operationError instanceof AccountChangeRequiredError,
         );
@@ -257,15 +374,78 @@ export function AuthProvider({
     [],
   );
 
+  const setupRetryActive =
+    initialSync !== null && initialSync.status !== 'interrupted';
+  useEffect(() => {
+    if (!setupRetryActive) return;
+    const coordinator = new RetryCoordinator({
+      attempt: () =>
+        perform(() => manager.retryPendingSetup(reportInitialSync)),
+      eligible: async () => {
+        const current = initialSyncRef.current;
+        return (
+          current?.status === 'connection-issues' ||
+          current?.status === 'attention'
+        );
+      },
+    });
+    coordinator.blockUntil(initialSyncRef.current?.retryAt ?? null);
+    retryCoordinatorRef.current = coordinator;
+    const subscription = Network.addNetworkStateListener((network) => {
+      coordinator.updateConnectivity(
+        network.isConnected !== false &&
+          network.isInternetReachable !== false,
+      );
+    });
+    return () => {
+      subscription.remove?.();
+      coordinator.dispose();
+      if (retryCoordinatorRef.current === coordinator) {
+        retryCoordinatorRef.current = null;
+      }
+    };
+  }, [manager, perform, reportInitialSync, setupRetryActive]);
+
+  useEffect(() => {
+    retryCoordinatorRef.current?.blockUntil(initialSync?.retryAt ?? null);
+  }, [initialSync?.retryAt]);
+
   const value = useMemo<AuthContextValue>(
     () => ({
       status,
       busy,
       error,
+      initialSync,
       requiresAccountChange,
-      login: (token) => perform(() => manager.login(token)),
+      login: (token) =>
+        perform(() => manager.login(token, reportInitialSync)),
       changeAccount: (token) =>
-        perform(() => manager.changeAccount(token)),
+        perform(() => manager.changeAccount(token, reportInitialSync)),
+      retryInitialSync: async () => {
+        await retryCoordinatorRef.current?.retryNow();
+      },
+      continueInterruptedSetup: () => {
+        setInitialSync({
+          status: 'running',
+          phase: 'account-connected',
+          message: null,
+          retryAt: null,
+        });
+        return perform(() =>
+          manager.continueInterruptedSetup(reportInitialSync),
+        );
+      },
+      useAnotherApiKey: async () => {
+        setBusy(true);
+        try {
+          await manager.useAnotherApiKey();
+          setInitialSync(null);
+          setError(null);
+          setStatus('unauthenticated');
+        } finally {
+          setBusy(false);
+        }
+      },
       logout: async () => {
         setBusy(true);
         try {
@@ -276,7 +456,16 @@ export function AuthProvider({
         }
       },
     }),
-    [busy, error, manager, perform, requiresAccountChange, status],
+    [
+      busy,
+      error,
+      initialSync,
+      manager,
+      perform,
+      reportInitialSync,
+      requiresAccountChange,
+      status,
+    ],
   );
 
   return (
@@ -296,4 +485,48 @@ function messageFor(error: unknown): string {
   return error instanceof Error
     ? error.message
     : 'Unable to sign in right now.';
+}
+
+function runningInitialSync(phase: InitialSyncPhase): InitialSyncState {
+  return {
+    status: 'running',
+    phase,
+    message: null,
+    retryAt: null,
+  };
+}
+
+function setupPhaseFor(
+  phase: 'idle' | 'preparing' | 'phase-one' | 'phase-two' | 'finalizing',
+): InitialSyncPhase | null {
+  if (phase === 'preparing') return 'account-connected';
+  if (phase === 'phase-one') return 'subjects';
+  if (phase === 'phase-two') return 'account-data';
+  if (phase === 'finalizing') return 'offline-library';
+  return null;
+}
+
+function initialSyncFailure(result: SyncResult): {
+  readonly error: InitialSyncError;
+  readonly state: InitialSyncState;
+} {
+  const connectionIssue =
+    (result.status === 'skipped' && result.reason === 'offline') ||
+    (result.status === 'failed' && result.error.kind === 'network');
+  const setupStatus = connectionIssue ? 'connection-issues' : 'attention';
+  const retryAt = result.status === 'failed' ? result.error.retryAt : null;
+  const message = connectionIssue
+    ? 'Taatoru could not reach WaniKani. It will continue when your connection returns.'
+    : result.status === 'failed'
+      ? result.error.message
+      : 'The initial WaniKani sync did not complete.';
+  return {
+    error: new InitialSyncError(setupStatus, message, retryAt),
+    state: {
+      status: setupStatus,
+      phase: 'offline-library',
+      message,
+      retryAt,
+    },
+  };
 }

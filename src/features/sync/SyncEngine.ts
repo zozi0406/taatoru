@@ -42,6 +42,7 @@ export type SyncResult =
   | { readonly status: 'failed'; readonly error: SafeSyncError };
 
 export interface SyncEngine {
+  readonly store?: SyncStore;
   synchronize(mode: SyncMode): Promise<SyncResult>;
 }
 
