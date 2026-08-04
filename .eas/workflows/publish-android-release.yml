@@ -1,0 +1,40 @@
+name: Publish Android release
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_id:
+        type: string
+        required: true
+        description: Verified production AAB build ID
+      release_tag:
+        type: string
+        required: true
+        description: Protected version tag for the build
+      commit_sha:
+        type: string
+        required: true
+        description: Reviewed source commit for the build
+
+jobs:
+  review_build:
+    name: Review production build metadata
+    type: doc
+    params:
+      md: |
+        Confirm build `${{ inputs.build_id }}` in the EAS dashboard before approval.
+
+        It must be an Android `production` store build for package `app.taatoru`, tag `${{ inputs.release_tag }}`, and commit `${{ inputs.commit_sha }}`. Reject the approval if any field differs.
+
+  approve_submission:
+    name: Submit verified AAB to Google Play internal testing?
+    needs: [review_build]
+    type: require-approval
+
+  submit_internal:
+    name: Submit exact AAB to internal testing
+    needs: [approve_submission]
+    type: submit
+    params:
+      build_id: ${{ inputs.build_id }}
+      profile: production
