@@ -58,3 +58,17 @@ test('EAS release builds require a version-tag push and cannot publish', () => {
   assert.equal(workflow.jobs.build_production_aab.params.profile, 'production');
   assert.equal(Object.values(workflow.jobs).some((job) => job.type === 'submit'), false);
 });
+
+test('Google Play submission is manual, reviewed, and exact', () => {
+  const workflow = readYaml('.eas/workflows/publish-android-release.yml');
+  const inputs = workflow.on.workflow_dispatch.inputs;
+  assert.equal(inputs.build_id.required, true);
+  assert.equal(inputs.release_tag.required, true);
+  assert.equal(inputs.commit_sha.required, true);
+  assert.equal(workflow.on.push, undefined);
+  assert.equal(workflow.jobs.approve_submission.type, 'require-approval');
+  assert.deepEqual(workflow.jobs.submit_internal.needs, ['approve_submission']);
+  assert.equal(workflow.jobs.submit_internal.params.build_id, '${{ inputs.build_id }}');
+  assert.equal(workflow.jobs.submit_internal.params.profile, 'production');
+  assert.equal(JSON.stringify(workflow).includes('latest'), false);
+});
