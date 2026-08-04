@@ -30,8 +30,10 @@
 - EAS project ID: `68bed05b-4efa-43d0-b82e-1f2cdb0a9cbc`
 - EAS project URL: <https://expo.dev/accounts/zozi0406/projects/taatoru>
 - Expo GitHub App access: pending
-- Android signing credential fingerprint: pending
-- Google Play service account: pending
+- Android signing credential: `Zffp7_SJXQ` (remote JKS, default)
+- Android signing SHA-256 fingerprint:
+  `67:5F:8D:61:C3:F2:4A:6E:7B:43:F2:BD:29:F3:C5:AD:17:B2:6C:C4:E3:3B:8A:AE:FE:1B:5A:63:BE:B6:AB:31`
+- Google Play service account: not configured
 - Release-candidate build and submission: pending
 
 The remaining hosted steps require explicit maintainer approval for Android
