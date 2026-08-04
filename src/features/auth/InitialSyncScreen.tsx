@@ -101,6 +101,7 @@ export function InitialSyncScreen({
           </Text>
         </View>
         <Text
+          accessibilityLiveRegion="polite"
           accessibilityRole="header"
           style={[styles.title, { color: theme.colors.text }]}
         >
@@ -245,7 +246,7 @@ function PhaseRow({
     if (active && !stalled) {
       pulse.value = withRepeat(
         withTiming(1.14, {
-          duration: 700,
+          duration: 260,
           reduceMotion: ReduceMotion.System,
         }),
         -1,
@@ -266,6 +267,7 @@ function PhaseRow({
   return (
     <View
       accessibilityLabel={`${definition.label}, ${phaseState}`}
+      accessibilityState={{ busy: active && !stalled }}
       accessible
       style={styles.phaseRow}
     >

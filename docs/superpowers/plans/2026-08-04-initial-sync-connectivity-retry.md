@@ -324,6 +324,10 @@ git commit -m "feat: retry uploads after reconnect"
 
 ### Task 5: Full and Android verification
 
+Local verification for this implementation may run on Node.js 26.5.0. The
+repository's declared installation and CI runtime remains Node.js 22 LTS; using
+Node 26 here is verification evidence, not a change to the supported runtime.
+
 **Files:**
 - Modify only if verification exposes a tested defect within this scope.
 

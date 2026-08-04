@@ -32,13 +32,32 @@ describe('InitialSyncScreen', () => {
   it('shows completed, active, and upcoming setup phases', async () => {
     await renderScreen(running);
 
-    expect(screen.getByText('Preparing Taatoru')).toBeTruthy();
+    expect(screen.getByText('Preparing Taatoru')).toHaveProp(
+      'accessibilityLiveRegion',
+      'polite',
+    );
     expect(
       screen.getByLabelText('Account connected, completed'),
     ).toBeTruthy();
     expect(screen.getByLabelText('Downloading subjects, completed')).toBeTruthy();
-    expect(screen.getByLabelText('Syncing your progress, in progress')).toBeTruthy();
+    expect(
+      screen.getByLabelText('Syncing your progress, in progress'),
+    ).toHaveProp('accessibilityState', { busy: true });
     expect(screen.getByLabelText('Building offline library, upcoming')).toBeTruthy();
+  });
+
+  it.each([
+    ['account-connected', 'Account connected'],
+    ['subjects', 'Downloading subjects'],
+    ['account-data', 'Syncing your progress'],
+    ['offline-library', 'Building offline library'],
+  ] as const)('announces %s as the active phase', async (phase, label) => {
+    await renderScreen({ ...running, phase });
+
+    expect(screen.getByLabelText(`${label}, in progress`)).toHaveProp(
+      'accessibilityState',
+      { busy: true },
+    );
   });
 
   it('offers a controlled retry when setup has connection issues', async () => {
