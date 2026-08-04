@@ -3,6 +3,7 @@ import {
   fireEvent,
   screen,
 } from '@testing-library/react-native';
+import * as Linking from 'expo-linking';
 
 import type { WaniKaniApi } from '@/api/WaniKaniApi';
 import { ApiError } from '@/api/errors';
@@ -22,6 +23,10 @@ import {
 } from '../AuthProvider';
 import { LoginScreen } from '../LoginScreen';
 import type { TokenStore } from '../tokenStore';
+
+afterEach(() => {
+  jest.restoreAllMocks();
+});
 
 test('rejects an empty token before making a request', async () => {
   const harness = await authHarness();
@@ -108,6 +113,51 @@ test('a different account requires explicit replacement before pending data is c
   }
 });
 
+test('guides a new user through WaniKani token creation', async () => {
+  await renderLoginScreen();
+
+  expect(
+    screen.getByText(/never sees your WaniKani password/i),
+  ).toBeOnTheScreen();
+  expect(screen.getByText(/1\. Sign in to WaniKani/i)).toBeOnTheScreen();
+  expect(
+    screen.getByText(/2\. Create a token named Taatoru/i),
+  ).toBeOnTheScreen();
+  expect(screen.getByText(/3\. Copy the token/i)).toBeOnTheScreen();
+});
+
+test('opens the official WaniKani token page', async () => {
+  const openUrl = jest.spyOn(Linking, 'openURL').mockResolvedValueOnce(true);
+  await renderLoginScreen();
+
+  await act(async () => {
+    fireEvent.press(
+      screen.getByRole('link', { name: 'Open WaniKani API Tokens' }),
+    );
+  });
+
+  expect(openUrl).toHaveBeenCalledWith(
+    'https://www.wanikani.com/settings/personal_access_tokens',
+  );
+});
+
+test('shows the official address when the browser cannot open', async () => {
+  jest
+    .spyOn(Linking, 'openURL')
+    .mockRejectedValueOnce(new Error('no browser handler'));
+  await renderLoginScreen();
+
+  await act(async () => {
+    fireEvent.press(
+      screen.getByRole('link', { name: 'Open WaniKani API Tokens' }),
+    );
+  });
+
+  expect(screen.getByRole('alert')).toHaveTextContent(
+    /https:\/\/www\.wanikani\.com\/settings\/personal_access_tokens/,
+  );
+});
+
 test('masks token input and submits its value', async () => {
   const onLogin = jest.fn(async () => undefined);
   await renderApp(
@@ -128,10 +178,53 @@ test('masks token input and submits its value', async () => {
     fireEvent.changeText(input, 'secret-token');
   });
   await act(async () => {
-    fireEvent.press(screen.getByRole('button', { name: 'Sign in' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Connect account' }));
   });
   expect(onLogin).toHaveBeenCalledWith('secret-token');
 });
+
+test('submits an explicitly confirmed account replacement separately', async () => {
+  const onLogin = jest.fn(async () => undefined);
+  const onChangeAccount = jest.fn(async () => undefined);
+  await renderApp(
+    <ThemeProvider scheme="light">
+      <LoginScreen
+        busy={false}
+        error="This token belongs to a different WaniKani account."
+        requiresAccountChange
+        onLogin={onLogin}
+        onChangeAccount={onChangeAccount}
+      />
+    </ThemeProvider>,
+  );
+
+  await act(async () => {
+    fireEvent.changeText(
+      screen.getByLabelText('WaniKani API token'),
+      'replacement-token',
+    );
+  });
+  await act(async () => {
+    fireEvent.press(screen.getByRole('button', { name: 'Replace account' }));
+  });
+
+  expect(onChangeAccount).toHaveBeenCalledWith('replacement-token');
+  expect(onLogin).not.toHaveBeenCalled();
+});
+
+async function renderLoginScreen() {
+  return renderApp(
+    <ThemeProvider scheme="light">
+      <LoginScreen
+        busy={false}
+        error={null}
+        requiresAccountChange={false}
+        onLogin={jest.fn()}
+        onChangeAccount={jest.fn()}
+      />
+    </ThemeProvider>,
+  );
+}
 
 async function authHarness(user = userFixture) {
   const db = await NodeTestDatabase.open();
