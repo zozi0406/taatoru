@@ -1,8 +1,9 @@
 # Taatoru
 
-Taatoru is a working-title Android-first Expo client for WaniKani. It is being
-built as a local-first application with lessons, reviews, search, analytics,
-notifications, and synchronization behavior characterized against
+Taatoru is a working-title Expo client for WaniKani. It targets compatibility
+with Android and iOS, but the initial release targets Android only. Taatoru is
+being built as a local-first application with lessons, reviews, search,
+analytics, notifications, and synchronization behavior characterized against
 [Tsurukame](https://github.com/davidsansome/tsurukame).
 
 ## Development
@@ -15,6 +16,11 @@ npm run android
 ```
 
 The generated `android/` and `ios/` projects are intentionally untracked.
+
+## WaniKani API
+
+Taatoru's API contract, best-practice validation, known gaps, and revalidation
+checklist are documented in [docs/wanikani-api.md](docs/wanikani-api.md).
 
 ## Credits and license
 

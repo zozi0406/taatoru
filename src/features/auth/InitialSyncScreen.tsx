@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect } from "react";
 import {
   ActivityIndicator,
   Modal,
@@ -7,7 +7,7 @@ import {
   StyleSheet,
   Text,
   View,
-} from 'react-native';
+} from "react-native";
 import Animated, {
   FadeInDown,
   ReduceMotion,
@@ -15,11 +15,11 @@ import Animated, {
   useSharedValue,
   withRepeat,
   withTiming,
-} from 'react-native-reanimated';
+} from "react-native-reanimated";
 
-import { useTheme } from '@/ui/theme/ThemeProvider';
+import { useTheme } from "@/ui/theme/ThemeProvider";
 
-import type { InitialSyncPhase, InitialSyncState } from './AuthProvider';
+import type { InitialSyncPhase, InitialSyncState } from "./AuthProvider";
 
 interface InitialSyncScreenProps {
   readonly state: InitialSyncState;
@@ -38,24 +38,24 @@ interface PhaseDefinition {
 
 const PHASES: readonly PhaseDefinition[] = [
   {
-    id: 'account-connected',
-    label: 'Account connected',
-    detail: 'Your WaniKani account is ready.',
+    id: "account-connected",
+    label: "Account connected",
+    detail: "Your WaniKani account is ready.",
   },
   {
-    id: 'subjects',
-    label: 'Downloading subjects',
-    detail: 'Loading kanji, vocabulary, and radicals.',
+    id: "subjects",
+    label: "Downloading subjects",
+    detail: "Loading kanji, vocabulary, and radicals.",
   },
   {
-    id: 'account-data',
-    label: 'Syncing your progress',
-    detail: 'Bringing over assignments and review history.',
+    id: "account-data",
+    label: "Syncing your progress",
+    detail: "Bringing over assignments and review history.",
   },
   {
-    id: 'offline-library',
-    label: 'Building offline library',
-    detail: 'Finishing the data you can use without a connection.',
+    id: "offline-library",
+    label: "Building offline library",
+    detail: "Finishing the data you can use without a connection.",
   },
 ];
 
@@ -68,8 +68,8 @@ export function InitialSyncScreen({
   onUseAnotherApiKey,
 }: InitialSyncScreenProps) {
   const theme = useTheme();
-  const connectionIssues = state.status === 'connection-issues';
-  const attention = state.status === 'attention';
+  const connectionIssues = state.status === "connection-issues";
+  const attention = state.status === "attention";
   const phaseIndex = PHASES.findIndex((phase) => phase.id === state.phase);
 
   return (
@@ -84,10 +84,7 @@ export function InitialSyncScreen({
         style={styles.heading}
       >
         <View
-          style={[
-            styles.brandMark,
-            { backgroundColor: theme.colors.accent },
-          ]}
+          style={[styles.brandMark, { backgroundColor: theme.colors.accent }]}
         >
           <Text
             accessibilityElementsHidden
@@ -106,19 +103,18 @@ export function InitialSyncScreen({
           style={[styles.title, { color: theme.colors.text }]}
         >
           {connectionIssues
-            ? 'Connection issues'
+            ? "Connection issues"
             : attention
-              ? 'Setup needs attention'
-              : 'Preparing Taatoru'}
+              ? "Setup needs attention"
+              : "Preparing Taatoru"}
         </Text>
-        <Text
-          style={[styles.intro, { color: theme.colors.textMuted }]}
-        >
+        <Text style={[styles.intro, { color: theme.colors.textMuted }]}>
           {connectionIssues
-            ? 'Your progress is safe. Taatoru will try again automatically when your connection returns.'
+            ? "Your progress is safe. Taatoru will try again automatically when your connection returns."
             : attention
-              ? state.message ?? 'Taatoru could not finish setting up your account.'
-              : 'We’re creating your private offline library. You can start learning as soon as this finishes.'}
+              ? (state.message ??
+                "Taatoru could not finish setting up your account.")
+              : "We’re creating your private offline library. You can start learning as soon as this finishes."}
         </Text>
       </Animated.View>
 
@@ -134,10 +130,10 @@ export function InitialSyncScreen({
         {PHASES.map((phase, index) => {
           const phaseState =
             index < phaseIndex
-              ? 'completed'
+              ? "completed"
               : index === phaseIndex
-                ? 'in progress'
-                : 'upcoming';
+                ? "in progress"
+                : "upcoming";
           return (
             <PhaseRow
               key={phase.id}
@@ -191,26 +187,19 @@ export function InitialSyncScreen({
             ]}
           >
             <Text
-              style={[
-                styles.secondaryButtonText,
-                { color: theme.colors.text },
-              ]}
+              style={[styles.secondaryButtonText, { color: theme.colors.text }]}
             >
               Use a different API token
             </Text>
           </Pressable>
-          <Text
-            style={[styles.retryNote, { color: theme.colors.textMuted }]}
-          >
+          <Text style={[styles.retryNote, { color: theme.colors.textMuted }]}>
             Retry is paced to protect your WaniKani rate limit.
           </Text>
         </Animated.View>
       ) : (
         <View style={styles.waitingRow}>
           <ActivityIndicator color={theme.colors.accent} />
-          <Text
-            style={[styles.waitingText, { color: theme.colors.textMuted }]}
-          >
+          <Text style={[styles.waitingText, { color: theme.colors.textMuted }]}>
             Keep Taatoru open while setup finishes
           </Text>
         </View>
@@ -218,7 +207,7 @@ export function InitialSyncScreen({
 
       <InterruptedSetupModal
         busy={busy}
-        visible={state.status === 'interrupted'}
+        visible={state.status === "interrupted"}
         onContinue={onContinueInterrupted}
         onUseAnotherApiKey={onUseAnotherApiKey}
       />
@@ -233,13 +222,13 @@ function PhaseRow({
   stalled,
 }: {
   readonly definition: PhaseDefinition;
-  readonly phaseState: 'completed' | 'in progress' | 'upcoming';
+  readonly phaseState: "completed" | "in progress" | "upcoming";
   readonly showConnector: boolean;
   readonly stalled: boolean;
 }) {
   const theme = useTheme();
-  const active = phaseState === 'in progress';
-  const completed = phaseState === 'completed';
+  const active = phaseState === "in progress";
+  const completed = phaseState === "completed";
   const pulse = useSharedValue(1);
 
   useEffect(() => {
@@ -281,9 +270,7 @@ function PhaseRow({
                   ? theme.colors.accent
                   : theme.colors.surfaceMuted,
               borderColor:
-                active || completed
-                  ? theme.colors.accent
-                  : theme.colors.border,
+                active || completed ? theme.colors.accent : theme.colors.border,
             },
             active && animatedMarker,
           ]}
@@ -299,7 +286,7 @@ function PhaseRow({
               },
             ]}
           >
-            {completed ? '✓' : active ? '•' : ''}
+            {completed ? "✓" : active ? "•" : ""}
           </Text>
         </Animated.View>
         {showConnector ? (
@@ -321,7 +308,7 @@ function PhaseRow({
             styles.phaseLabel,
             {
               color:
-                phaseState === 'upcoming'
+                phaseState === "upcoming"
                   ? theme.colors.textMuted
                   : theme.colors.text,
             },
@@ -329,9 +316,7 @@ function PhaseRow({
         >
           {definition.label}
         </Text>
-        <Text
-          style={[styles.phaseDetail, { color: theme.colors.textMuted }]}
-        >
+        <Text style={[styles.phaseDetail, { color: theme.colors.textMuted }]}>
           {definition.detail}
         </Text>
       </View>
@@ -362,7 +347,7 @@ function InterruptedSetupModal({
         accessibilityViewIsModal
         style={[
           styles.modalBackdrop,
-          { backgroundColor: 'rgba(5, 12, 24, 0.62)' },
+          { backgroundColor: "rgba(5, 12, 24, 0.62)" },
         ]}
       >
         <View
@@ -380,11 +365,9 @@ function InterruptedSetupModal({
           >
             Setup was interrupted
           </Text>
-          <Text
-            style={[styles.modalBody, { color: theme.colors.textMuted }]}
-          >
-            To make sure nothing is out of date, Taatoru will discard the
-            partial download and restart the download from the beginning.
+          <Text style={[styles.modalBody, { color: theme.colors.textMuted }]}>
+            Continue with the same account to discard the partial download and
+            restart the download from the beginning, or use a new API key.
           </Text>
           <Pressable
             accessibilityRole="button"
@@ -420,10 +403,7 @@ function InterruptedSetupModal({
             ]}
           >
             <Text
-              style={[
-                styles.secondaryButtonText,
-                { color: theme.colors.text },
-              ]}
+              style={[styles.secondaryButtonText, { color: theme.colors.text }]}
             >
               Use another API key
             </Text>
@@ -441,13 +421,13 @@ const styles = StyleSheet.create({
   },
   brandGlyph: {
     fontSize: 24,
-    fontWeight: '800',
+    fontWeight: "800",
   },
   brandMark: {
-    alignItems: 'center',
+    alignItems: "center",
     borderRadius: 18,
     height: 56,
-    justifyContent: 'center',
+    justifyContent: "center",
     marginBottom: 20,
     width: 56,
   },
@@ -457,7 +437,7 @@ const styles = StyleSheet.create({
     width: 2,
   },
   heading: {
-    alignItems: 'center',
+    alignItems: "center",
     marginBottom: 28,
   },
   intro: {
@@ -465,30 +445,30 @@ const styles = StyleSheet.create({
     lineHeight: 23,
     marginTop: 10,
     maxWidth: 420,
-    textAlign: 'center',
+    textAlign: "center",
   },
   marker: {
-    alignItems: 'center',
+    alignItems: "center",
     borderRadius: 14,
     borderWidth: 2,
     height: 28,
-    justifyContent: 'center',
+    justifyContent: "center",
     width: 28,
   },
   markerColumn: {
-    alignItems: 'center',
+    alignItems: "center",
     marginRight: 14,
     width: 28,
   },
   markerText: {
     fontSize: 17,
-    fontWeight: '800',
+    fontWeight: "800",
     lineHeight: 19,
   },
   modalBackdrop: {
-    alignItems: 'center',
+    alignItems: "center",
     flex: 1,
-    justifyContent: 'center',
+    justifyContent: "center",
     padding: 24,
   },
   modalBody: {
@@ -502,11 +482,11 @@ const styles = StyleSheet.create({
     gap: 12,
     maxWidth: 440,
     padding: 24,
-    width: '100%',
+    width: "100%",
   },
   modalTitle: {
     fontSize: 24,
-    fontWeight: '800',
+    fontWeight: "800",
     letterSpacing: -0.4,
   },
   phaseCard: {
@@ -526,64 +506,64 @@ const styles = StyleSheet.create({
   },
   phaseLabel: {
     fontSize: 17,
-    fontWeight: '700',
+    fontWeight: "700",
     lineHeight: 22,
   },
   phaseRow: {
-    flexDirection: 'row',
+    flexDirection: "row",
     minHeight: 74,
   },
   pressed: {
     opacity: 0.65,
   },
   primaryButton: {
-    alignItems: 'center',
+    alignItems: "center",
     borderRadius: 14,
-    justifyContent: 'center',
+    justifyContent: "center",
     minHeight: 50,
     paddingHorizontal: 18,
   },
   primaryButtonText: {
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: "700",
   },
   retryNote: {
     fontSize: 13,
     lineHeight: 18,
-    textAlign: 'center',
+    textAlign: "center",
   },
   screen: {
     flex: 1,
   },
   screenContent: {
     flexGrow: 1,
-    justifyContent: 'center',
+    justifyContent: "center",
     paddingHorizontal: 22,
     paddingVertical: 36,
   },
   secondaryButton: {
-    alignItems: 'center',
+    alignItems: "center",
     borderRadius: 14,
     borderWidth: 1,
-    justifyContent: 'center',
+    justifyContent: "center",
     minHeight: 50,
     paddingHorizontal: 18,
   },
   secondaryButtonText: {
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   title: {
     fontSize: 30,
-    fontWeight: '800',
+    fontWeight: "800",
     letterSpacing: -0.7,
-    textAlign: 'center',
+    textAlign: "center",
   },
   waitingRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
+    alignItems: "center",
+    flexDirection: "row",
     gap: 10,
-    justifyContent: 'center',
+    justifyContent: "center",
     marginTop: 24,
   },
   waitingText: {

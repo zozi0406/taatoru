@@ -108,15 +108,18 @@ export class HttpWaniKaniApi implements WaniKaniApi {
         pageSignal,
       );
 
-    return updatedAfter === null
-      ? fetchSpeculativePages({
-          url,
-          windows: 9,
-          perPage: 1000,
-          fetchPage,
-          signal,
-        })
-      : fetchAllPages(url, fetchPage, signal);
+    return preserveUpdatedAfter(
+      updatedAfter === null
+        ? fetchSpeculativePages({
+            url,
+            windows: 9,
+            perPage: 1000,
+            fetchPage,
+            signal,
+          })
+        : fetchAllPages(url, fetchPage, signal),
+      updatedAfter,
+    );
   }
 
   getAssignments(
@@ -128,10 +131,13 @@ export class HttpWaniKaniApi implements WaniKaniApi {
       hidden: 'false',
       updated_after: updatedAfter,
     });
-    return this.fetchCollection(
-      url,
-      (object): object is 'assignment' => object === 'assignment',
-      signal,
+    return preserveUpdatedAfter(
+      this.fetchCollection(
+        url,
+        (object): object is 'assignment' => object === 'assignment',
+        signal,
+      ),
+      updatedAfter,
     );
   }
 
@@ -142,10 +148,13 @@ export class HttpWaniKaniApi implements WaniKaniApi {
     const url = this.collectionUrl('study_materials', {
       updated_after: updatedAfter,
     });
-    return this.fetchCollection(
-      url,
-      (object): object is 'study_material' => object === 'study_material',
-      signal,
+    return preserveUpdatedAfter(
+      this.fetchCollection(
+        url,
+        (object): object is 'study_material' => object === 'study_material',
+        signal,
+      ),
+      updatedAfter,
     );
   }
 
@@ -167,10 +176,13 @@ export class HttpWaniKaniApi implements WaniKaniApi {
     const url = this.collectionUrl('voice_actors', {
       updated_after: updatedAfter,
     });
-    return this.fetchCollection(
-      url,
-      (object): object is 'voice_actor' => object === 'voice_actor',
-      signal,
+    return preserveUpdatedAfter(
+      this.fetchCollection(
+        url,
+        (object): object is 'voice_actor' => object === 'voice_actor',
+        signal,
+      ),
+      updatedAfter,
     );
   }
 
@@ -190,15 +202,18 @@ export class HttpWaniKaniApi implements WaniKaniApi {
         pageSignal,
       );
 
-    return updatedAfter === null
-      ? fetchSpeculativePages({
-          url,
-          windows: 9,
-          perPage: 1000,
-          fetchPage,
-          signal,
-        })
-      : fetchAllPages(url, fetchPage, signal);
+    return preserveUpdatedAfter(
+      updatedAfter === null
+        ? fetchSpeculativePages({
+            url,
+            windows: 9,
+            perPage: 1000,
+            fetchPage,
+            signal,
+          })
+        : fetchAllPages(url, fetchPage, signal),
+      updatedAfter,
+    );
   }
 
   async startAssignment(input: StartAssignmentInput): Promise<void> {
@@ -381,6 +396,20 @@ export class HttpWaniKaniApi implements WaniKaniApi {
     }
     return url.toString();
   }
+}
+
+async function preserveUpdatedAfter<
+  T,
+  TObject extends WaniKaniObject,
+>(
+  pagePromise: Promise<CollectionPage<T, TObject>>,
+  updatedAfter: string | null,
+): Promise<CollectionPage<T, TObject>> {
+  const page = await pagePromise;
+  return {
+    ...page,
+    data_updated_at: page.data_updated_at ?? updatedAfter,
+  };
 }
 
 function decodeResource<T, TObject extends WaniKaniObject>(

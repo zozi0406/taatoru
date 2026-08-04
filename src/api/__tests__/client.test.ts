@@ -56,6 +56,30 @@ test('applies Tsurukame collection filters without losing the update cursor', as
   );
 });
 
+test('preserves the prior cursor when incremental collections are empty', async () => {
+  const fetch = jest
+    .fn()
+    .mockImplementation(async () => jsonResponse(collectionPage([])));
+  const api = new HttpWaniKaniApi({ token: 'secret', fetch });
+  const cursor = '2026-07-29T12:34:56.123456Z';
+
+  const pages = await Promise.all([
+    api.getSubjects(cursor),
+    api.getAssignments(cursor),
+    api.getStudyMaterials(cursor),
+    api.getVoiceActors(cursor),
+    api.getReviewStatistics(cursor),
+  ]);
+
+  expect(pages.map(({ data_updated_at: updatedAt }) => updatedAt)).toEqual([
+    cursor,
+    cursor,
+    cursor,
+    cursor,
+    cursor,
+  ]);
+});
+
 test('decodes structured rate-limit errors without retaining query data', async () => {
   const fetch = jest.fn().mockResolvedValue(
     jsonResponse(
