@@ -21,9 +21,11 @@
 
 - GitHub repository: `zozi0406/taatoru`
 - GitHub Actions repository secrets: 0
-- GitHub workflow runs: pending; the local commits have not been pushed
-- GitHub `main` ruleset: not configured
-- GitHub `v*` tag ruleset: not configured
+- GitHub pull request: <https://github.com/zozi0406/taatoru/pull/2>
+- GitHub CI run: <https://github.com/zozi0406/taatoru/actions/runs/30934046851>
+  (`Taatoru CI` passed)
+- GitHub `main` ruleset: `Protect main` (`20398515`, active)
+- GitHub `v*` tag ruleset: `Protect release tags` (`20398530`, active)
 - Git tags: none
 - Expo login: authenticated as `zozi0406`
 - EAS project: `@zozi0406/taatoru`
