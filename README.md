@@ -17,6 +17,11 @@ npm run android
 
 The generated `android/` and `ios/` projects are intentionally untracked.
 
+## Releases
+
+Android builds use secret-free GitHub checks and restricted EAS release
+workflows. Maintainers should follow [the Android release runbook](docs/releases.md).
+
 ## WaniKani API
 
 Taatoru's API contract, best-practice validation, known gaps, and revalidation

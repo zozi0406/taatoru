@@ -72,3 +72,18 @@ test('Google Play submission is manual, reviewed, and exact', () => {
   assert.equal(workflow.jobs.submit_internal.params.profile, 'production');
   assert.equal(JSON.stringify(workflow).includes('latest'), false);
 });
+
+test('release-sensitive files require owner review', () => {
+  const codeowners = read('.github/CODEOWNERS');
+  for (const path of [
+    '/.github/',
+    '/.eas/',
+    '/eas.json',
+    '/app.config.ts',
+    '/package.json',
+    '/package-lock.json',
+    '/docs/releases.md',
+  ]) {
+    assert.match(codeowners, new RegExp(`^${path.replaceAll('.', '\\.')}\\s+@zozi0406$`, 'm'));
+  }
+});
