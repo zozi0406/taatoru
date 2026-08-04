@@ -14,7 +14,17 @@ test('GitHub CI is secret-free and targets main', () => {
   assert.equal(workflow.jobs.verify.name, 'Taatoru CI');
   assert.equal(JSON.stringify(workflow).includes('secrets.'), false);
 
-  const commands = workflow.jobs.verify.steps.flatMap((step) => step.run ?? []);
+  const headerStep = workflow.jobs.verify.steps.find(
+    (step) => step.name === 'Use installed Node headers',
+  );
+  assert.equal(
+    headerStep?.run.trim(),
+    `node -e "const path = require('node:path'); process.stdout.write('npm_config_nodedir=' + path.dirname(path.dirname(process.execPath)) + '\\n')" >> "$GITHUB_ENV"`,
+  );
+
+  const commands = workflow.jobs.verify.steps
+    .filter((step) => step.name !== 'Use installed Node headers')
+    .flatMap((step) => step.run ?? []);
   assert.deepEqual(commands, [
     'npm ci',
     'npm run verify',

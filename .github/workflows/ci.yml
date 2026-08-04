@@ -26,6 +26,9 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      - name: Use installed Node headers
+        run: |
+          node -e "const path = require('node:path'); process.stdout.write('npm_config_nodedir=' + path.dirname(path.dirname(process.execPath)) + '\n')" >> "$GITHUB_ENV"
       - name: Install dependencies
         run: npm ci
       - name: Run lint, types, and tests
