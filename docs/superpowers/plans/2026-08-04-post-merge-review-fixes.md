@@ -6,7 +6,7 @@
 
 **Architecture:** Authentication will distinguish a cached returning session from a first-time online bootstrap. Full refreshes will fetch a complete generation before replacing SQLite data in one transaction. Reviews will use a pure reducer plus a SQLite-backed active-session repository, while lesson and review completion will commit their pending write and next session snapshot in the same transaction.
 
-**Tech Stack:** Expo Router, React Native, TypeScript, SQLite through the repository `Database` interface, Jest, React Native Testing Library, Node 26.5.0 for local verification.
+**Tech Stack:** Expo Router, React Native, TypeScript, SQLite through the repository `Database` interface, Jest, React Native Testing Library, Node 22.23.2 for local verification.
 
 ## Global Constraints
 
@@ -279,7 +279,7 @@ Expected: both focused suites pass and a simulated snapshot failure leaves the a
 
 Run: `npm run verify`
 
-Expected: lint, TypeScript, every Jest suite, and every test pass on Node 26.5.0.
+Expected: lint, TypeScript, every Jest suite, and every test pass on Node 22.23.2.
 
 - [ ] **Step 2: Review the exact change boundary**
 
