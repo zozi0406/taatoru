@@ -1,5 +1,6 @@
 import type { SubjectResource } from '@/api/types';
 import type { Database } from '@/db/Database';
+import { SUBJECT_WITHIN_GRANTED_LEVEL } from '@/db/subscription';
 import type { SimilarKanjiSubject } from './similarKanji';
 import { resolveSimilarKanji } from './similarKanji';
 
@@ -114,7 +115,9 @@ export async function loadSubjectDetails(
        ON rs.subject_id = s.id AND rs.hidden = 0
      LEFT JOIN study_materials sm
        ON sm.subject_id = s.id AND sm.hidden = 0
-     WHERE s.id = ? AND s.hidden_at IS NULL`,
+     WHERE s.id = ?
+       AND s.hidden_at IS NULL
+       AND ${SUBJECT_WITHIN_GRANTED_LEVEL}`,
     [subjectId],
   );
   if (row === null) {
@@ -203,9 +206,10 @@ async function loadRelatedSubjects(
   }
   const rows = await db.all<RelatedRow>(
     `SELECT id, resource_json AS resourceJson
-     FROM subjects
-     WHERE hidden_at IS NULL
-       AND id IN (${uniqueIds.map(() => '?').join(', ')})`,
+     FROM subjects s
+     WHERE s.hidden_at IS NULL
+       AND ${SUBJECT_WITHIN_GRANTED_LEVEL}
+       AND s.id IN (${uniqueIds.map(() => '?').join(', ')})`,
     uniqueIds,
   );
   const byId = new Map(rows.map((row) => [row.id, parseSubject(row.resourceJson)]));

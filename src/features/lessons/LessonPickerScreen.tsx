@@ -28,6 +28,7 @@ import {
 import type { SubjectResource } from '@/api/types';
 import type { Database } from '@/db/Database';
 import { NOT_EXCLUDED } from '@/db/repositories/AssignmentRepository';
+import { SUBJECT_WITHIN_GRANTED_LEVEL } from '@/db/subscription';
 import { Card } from '@/ui/components/Card';
 import { SubjectChip } from '@/ui/components/SubjectChip';
 import { minimumTouchTarget } from '@/ui/theme/spacing';
@@ -364,7 +365,7 @@ export async function loadLessonPickerItems(
        AND a.started_at IS NULL
        AND a.hidden = 0
        AND s.hidden_at IS NULL
-       AND s.level <= (SELECT max_level_granted FROM user LIMIT 1)
+       AND ${SUBJECT_WITHIN_GRANTED_LEVEL}
        AND ${NOT_EXCLUDED}
      ORDER BY s.level, s.lesson_position, s.id`,
   );

@@ -1,5 +1,6 @@
 import type { AssignmentData, IdentifiedResource } from '@/api/types';
 import type { Database } from '../Database';
+import { SUBJECT_WITHIN_GRANTED_LEVEL } from '../subscription';
 
 export interface AvailableAssignment {
   readonly assignmentId: number;
@@ -109,7 +110,7 @@ export class AssignmentRepository {
          AND a.started_at IS NULL
          AND a.hidden = 0
          AND s.hidden_at IS NULL
-         AND s.level <= (SELECT max_level_granted FROM user LIMIT 1)
+         AND ${SUBJECT_WITHIN_GRANTED_LEVEL}
          AND ${NOT_EXCLUDED}
        ORDER BY s.level, s.lesson_position, s.id`,
     );

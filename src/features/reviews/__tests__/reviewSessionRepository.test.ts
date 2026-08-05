@@ -1,3 +1,4 @@
+import type { Resource, UserData } from '@/api/types';
 import type {
   Database,
   DatabaseTransaction,
@@ -7,8 +8,13 @@ import type {
 import { migrateDatabase } from '@/db/migrate';
 import { NodeTestDatabase } from '@/db/NodeTestDatabase';
 import { AssignmentRepository } from '@/db/repositories/AssignmentRepository';
+import { ResourceRepository } from '@/db/repositories/ResourceRepository';
 import { SubjectRepository } from '@/db/repositories/SubjectRepository';
-import { assignmentFixture, kanjiFixture } from '@/fixtures/api';
+import {
+  assignmentFixture,
+  kanjiFixture,
+  userFixture,
+} from '@/fixtures/api';
 import {
   ReviewSessionRepository,
   type ReviewSessionSnapshot,
@@ -40,6 +46,45 @@ test('persists and restores stable review state and subjects by ID', async () =>
     );
     expect(row?.stateJson).not.toContain('resource_json');
     expect(row?.stateJson).not.toContain('characters');
+  } finally {
+    await db.close();
+  }
+});
+
+test('limits resumed review subjects to max_level_granted', async () => {
+  const db = await NodeTestDatabase.open();
+  await migrateDatabase(db);
+  try {
+    const highSubject = {
+      ...kanjiFixture,
+      id: 402,
+      url: 'https://api.wanikani.com/v2/subjects/402',
+      data: { ...kanjiFixture.data, level: 4 },
+    };
+    const users = new ResourceRepository(db);
+    await users.replaceUser(userWithMaxLevel(3));
+    await new SubjectRepository(db).replaceSubjects(
+      [kanjiFixture, highSubject],
+      null,
+    );
+    const repository = new ReviewSessionRepository(db);
+    const snapshot = await repository.startReviewSession(
+      [
+        { assignmentId: 1_201, subjectId: kanjiFixture.id },
+        { assignmentId: 1_402, subjectId: highSubject.id },
+      ],
+      NOW,
+    );
+
+    await expect(repository.loadReviewSubjects(snapshot)).resolves.toEqual([
+      kanjiFixture,
+    ]);
+
+    await users.replaceUser(userWithMaxLevel(60));
+    await expect(repository.loadReviewSubjects(snapshot)).resolves.toEqual([
+      kanjiFixture,
+      highSubject,
+    ]);
   } finally {
     await db.close();
   }
@@ -120,6 +165,7 @@ test('rolls back review completion when its next snapshot cannot be saved', asyn
 async function reviewDatabase(): Promise<NodeTestDatabase> {
   const db = await NodeTestDatabase.open();
   await migrateDatabase(db);
+  await new ResourceRepository(db).replaceUser(userFixture);
   await new SubjectRepository(db).replaceSubjects([kanjiFixture], null);
   await new AssignmentRepository(db).replaceAssignments(
     [assignmentFixture],
@@ -215,4 +261,25 @@ class FailSessionSaveTransaction implements DatabaseTransaction {
 
 function sessionSaveFails(sql: string): boolean {
   return sql.includes('UPDATE active_sessions');
+}
+
+function userWithMaxLevel(
+  maxLevelGranted: number,
+): Resource<UserData, 'user'> {
+  const fullAccess = maxLevelGranted === 60;
+  return {
+    ...userFixture,
+    data: {
+      ...userFixture.data,
+      subscription: {
+        ...userFixture.data.subscription,
+        active: fullAccess,
+        max_level_granted: maxLevelGranted,
+        period_ends_at: fullAccess
+          ? userFixture.data.subscription.period_ends_at
+          : null,
+        type: fullAccess ? 'recurring' : 'free',
+      },
+    },
+  };
 }

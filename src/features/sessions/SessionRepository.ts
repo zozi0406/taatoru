@@ -1,5 +1,6 @@
 import type { SubjectResource } from '@/api/types';
 import type { Database, DatabaseTransaction } from '@/db/Database';
+import { SUBJECT_WITHIN_GRANTED_LEVEL } from '@/db/subscription';
 import type { LessonCandidate } from '@/features/lessons/types';
 import { PendingWriteRepository } from '@/features/sync/PendingWriteRepository';
 
@@ -160,9 +161,10 @@ export class SessionRepository {
     }
     const rows = await this.db.all<SubjectRow>(
       `SELECT id, resource_json AS resourceJson
-       FROM subjects
-       WHERE hidden_at IS NULL
-         AND id IN (${ids.map(() => '?').join(', ')})`,
+       FROM subjects s
+       WHERE s.hidden_at IS NULL
+         AND ${SUBJECT_WITHIN_GRANTED_LEVEL}
+         AND s.id IN (${ids.map(() => '?').join(', ')})`,
       ids,
     );
     const byId = new Map(

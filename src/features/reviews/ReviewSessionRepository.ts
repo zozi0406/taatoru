@@ -1,5 +1,6 @@
 import type { SubjectResource } from '@/api/types';
 import type { Database, DatabaseTransaction } from '@/db/Database';
+import { SUBJECT_WITHIN_GRANTED_LEVEL } from '@/db/subscription';
 import { PendingWriteRepository } from '@/features/sync/PendingWriteRepository';
 import type { ReviewPrompt } from './types';
 
@@ -108,15 +109,23 @@ export class ReviewSessionRepository {
     };
   }
 
+  saveReviewSession(
+    snapshot: ReviewSessionSnapshot,
+    now = new Date(),
+  ): Promise<ReviewSessionSnapshot> {
+    return this.saveReviewSnapshotWith(this.db, snapshot, now);
+  }
+
   async loadReviewSubjects(
     snapshot: ReviewSessionSnapshot,
   ): Promise<readonly SubjectResource[]> {
     const ids = [...new Set(snapshot.items.map(({ subjectId }) => subjectId))];
     const rows = await this.db.all<SubjectRow>(
       `SELECT id, resource_json AS resourceJson
-       FROM subjects
-       WHERE hidden_at IS NULL
-         AND id IN (${ids.map(() => '?').join(', ')})`,
+       FROM subjects s
+       WHERE s.hidden_at IS NULL
+         AND ${SUBJECT_WITHIN_GRANTED_LEVEL}
+         AND s.id IN (${ids.map(() => '?').join(', ')})`,
       ids,
     );
     const byId = new Map(

@@ -10,6 +10,7 @@ import {
 } from '@/features/reviews/ReviewSessionRepository';
 import { ReviewSessionScreen } from '@/features/reviews/ReviewSessionScreen';
 import { startReviewSession } from '@/features/reviews/reviewLauncher';
+import { reconcileReviewSession } from '@/features/sessions/sessionSubjects';
 import { useTheme } from '@/ui/theme/ThemeProvider';
 
 export default function ReviewSessionRoute() {
@@ -30,14 +31,41 @@ export default function ReviewSessionRoute() {
     let active = true;
     void (async () => {
       const existing = await repository.loadReviewSession();
-      const loaded = existing ?? (await startReviewSession(db));
+      if (existing !== null) {
+        const existingSubjects = await repository.loadReviewSubjects(existing);
+        const reconciled = reconcileReviewSession(existing, existingSubjects);
+        if (reconciled !== null) {
+          const restored =
+            reconciled === existing
+              ? existing
+              : await repository.saveReviewSession(reconciled);
+          if (active) {
+            setSnapshot(restored);
+            setSubjects(existingSubjects);
+          }
+          return;
+        }
+        await repository.clearReviewSession();
+      }
+
+      const loaded = await startReviewSession(db);
       if (loaded === null) {
         router.replace('/');
         return;
       }
       const loadedSubjects = await repository.loadReviewSubjects(loaded);
+      const reconciled = reconcileReviewSession(loaded, loadedSubjects);
+      if (reconciled === null) {
+        await repository.clearReviewSession();
+        router.replace('/');
+        return;
+      }
+      const restored =
+        reconciled === loaded
+          ? loaded
+          : await repository.saveReviewSession(reconciled);
       if (active) {
-        setSnapshot(loaded);
+        setSnapshot(restored);
         setSubjects(loadedSubjects);
       }
     })().catch(() => {

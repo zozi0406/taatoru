@@ -1,4 +1,5 @@
 import type { Database } from '@/db/Database';
+import { SUBJECT_WITHIN_GRANTED_LEVEL } from '@/db/subscription';
 
 export interface AnalyticsAssignmentInput {
   readonly availableAt: string;
@@ -240,7 +241,8 @@ export async function loadAnalyticsSnapshot(
          FROM assignments a
          JOIN subjects s ON s.id = a.subject_id
          WHERE a.srs_stage BETWEEN 1 AND 8
-           AND a.available_at IS NOT NULL`,
+           AND a.available_at IS NOT NULL
+           AND ${SUBJECT_WITHIN_GRANTED_LEVEL}`,
       ),
       db.all<AnalyticsProgressInput>(
         `SELECT sp.srs_stage AS srsStage,
@@ -248,7 +250,8 @@ export async function loadAnalyticsSnapshot(
                 (s.hidden_at IS NOT NULL) AS subjectHidden
          FROM subject_progress sp
          JOIN subjects s ON s.id = sp.subject_id
-         LEFT JOIN assignments a ON a.subject_id = sp.subject_id`,
+         LEFT JOIN assignments a ON a.subject_id = sp.subject_id
+         WHERE ${SUBJECT_WITHIN_GRANTED_LEVEL}`,
       ),
       db.all<AnalyticsLevelInput>(
         `SELECT level,
@@ -273,7 +276,8 @@ export async function loadAnalyticsSnapshot(
                 a.burned_at AS assignmentBurnedAt
          FROM review_statistics rs
          JOIN subjects s ON s.id = rs.subject_id
-         LEFT JOIN assignments a ON a.subject_id = s.id`,
+         LEFT JOIN assignments a ON a.subject_id = s.id
+         WHERE ${SUBJECT_WITHIN_GRANTED_LEVEL}`,
       ),
     ]);
   return calculateAnalytics(

@@ -18,6 +18,7 @@
 
 import type { SubjectResource } from '@/api/types';
 import type { Database } from '@/db/Database';
+import { SUBJECT_WITHIN_GRANTED_LEVEL } from '@/db/subscription';
 import { romajiToKana } from './kana';
 
 export interface SubjectSearchResult {
@@ -69,6 +70,7 @@ export async function searchSubjects(
      LEFT JOIN study_materials sm
        ON sm.subject_id = s.id AND sm.hidden = 0
      WHERE s.hidden_at IS NULL
+       AND ${SUBJECT_WITHIN_GRANTED_LEVEL}
        AND (
          lower(COALESCE(s.characters, '')) LIKE ? ESCAPE '!'
          OR lower(COALESCE(s.characters, '')) LIKE ? ESCAPE '!'

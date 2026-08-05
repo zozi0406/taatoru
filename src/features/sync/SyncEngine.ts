@@ -135,7 +135,6 @@ export class SynchronizationEngine implements SyncEngine {
     const state = await this.options.repository.getStateSnapshot();
     const selectedWrites = this.selectWrites(state, mode);
     this.setPhase('phase-one');
-    let subjectCount = 0;
     await allOrThrow([
       this.options.pendingWrites.sendSelectedPendingWrites(
         { progressIds: selectedWrites.progressIds, studyMaterialIds: [] },
@@ -148,23 +147,23 @@ export class SynchronizationEngine implements SyncEngine {
         },
         now,
       ),
-      (async () => {
-        const page = await this.options.api.getSubjects(
-          state.cursors.subjects,
-        );
-        await this.options.repository.replaceSubjects(
-          page.data,
-          page.data_updated_at,
-        );
-        subjectCount = page.data.length;
-      })(),
+      this.options.api
+        .getUser()
+        .then((resource) => this.options.repository.replaceUser(resource)),
     ]);
+    const refreshedState = await this.options.repository.getStateSnapshot();
+    const subjects = await this.options.api.getSubjects(
+      refreshedState.cursors.subjects,
+    );
+    await this.options.repository.replaceSubjects(
+      subjects.data,
+      subjects.data_updated_at,
+    );
 
     this.setPhase('phase-two');
     const resources = await Promise.allSettled([
         this.options.api.getAssignments(state.cursors.assignments),
         this.options.api.getStudyMaterials(state.cursors.studyMaterials),
-        this.options.api.getUser(),
         this.options.api.getLevelProgressions(),
         this.options.api.getVoiceActors(state.cursors.voiceActors),
         this.options.api.getReviewStatistics(
@@ -202,22 +201,18 @@ export class SynchronizationEngine implements SyncEngine {
           );
           return page.data.length;
       }),
-      await store(resources[2], async (resource) => {
-          await this.options.repository.replaceUser(resource);
-          return 1;
-      }),
-      await store(resources[3], async (page) => {
+      await store(resources[2], async (page) => {
           await this.options.repository.replaceLevelProgressions(page.data);
           return page.data.length;
       }),
-      await store(resources[4], async (page) => {
+      await store(resources[3], async (page) => {
           await this.options.repository.replaceVoiceActors(
             page.data,
             page.data_updated_at,
           );
           return page.data.length;
       }),
-      await store(resources[5], async (page) => {
+      await store(resources[4], async (page) => {
           await this.options.repository.replaceReviewStatistics(
             page.data,
             page.data_updated_at,
@@ -229,7 +224,8 @@ export class SynchronizationEngine implements SyncEngine {
       throw failures[0];
     }
     return (
-      subjectCount +
+      subjects.data.length +
+      1 +
       phaseTwoCounts.reduce((total, count) => total + count, 0)
     );
   }

@@ -1,4 +1,5 @@
 import type { Database } from '@/db/Database';
+import { SUBJECT_WITHIN_GRANTED_LEVEL } from '@/db/subscription';
 
 export interface SimilarKanjiSubject {
   readonly id: number;
@@ -31,10 +32,11 @@ export async function resolveSimilarKanji(
   const placeholders = uniqueIds.map(() => '?').join(', ');
   const rows = await db.all<SimilarKanjiRow>(
     `SELECT id, level, characters, resource_json AS resourceJson
-     FROM subjects
-     WHERE object = 'kanji'
-       AND hidden_at IS NULL
-       AND id IN (${placeholders})`,
+     FROM subjects s
+     WHERE s.object = 'kanji'
+       AND s.hidden_at IS NULL
+       AND ${SUBJECT_WITHIN_GRANTED_LEVEL}
+       AND s.id IN (${placeholders})`,
     uniqueIds,
   );
   const byId = new Map(rows.map((row) => [row.id, row]));

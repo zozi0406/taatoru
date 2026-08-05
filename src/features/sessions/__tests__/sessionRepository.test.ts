@@ -1,3 +1,4 @@
+import type { Resource, UserData } from '@/api/types';
 import { migrateDatabase } from '@/db/migrate';
 import { NodeTestDatabase } from '@/db/NodeTestDatabase';
 import type {
@@ -7,9 +8,14 @@ import type {
   SqlValue,
 } from '@/db/Database';
 import { AssignmentRepository } from '@/db/repositories/AssignmentRepository';
+import { ResourceRepository } from '@/db/repositories/ResourceRepository';
 import { SubjectRepository } from '@/db/repositories/SubjectRepository';
 import type { LessonCandidate } from '@/features/lessons/types';
-import { assignmentFixture, kanjiFixture } from '@/fixtures/api';
+import {
+  assignmentFixture,
+  kanjiFixture,
+  userFixture,
+} from '@/fixtures/api';
 import { SessionRepository } from '../SessionRepository';
 
 const NOW = new Date('2026-07-29T12:00:00.000Z');
@@ -76,6 +82,7 @@ test('reloads subjects by ID after process recreation in queue order', async () 
   const db = await NodeTestDatabase.open();
   await migrateDatabase(db);
   try {
+    await new ResourceRepository(db).replaceUser(userFixture);
     await seedSubject(db, 1, 'One');
     await seedSubject(db, 2, 'Two');
     const repository = new SessionRepository(db);
@@ -89,6 +96,42 @@ test('reloads subjects by ID after process recreation in queue order', async () 
     ).resolves.toEqual([
       expect.objectContaining({ id: 2 }),
       expect.objectContaining({ id: 1 }),
+    ]);
+  } finally {
+    await db.close();
+  }
+});
+
+test('limits resumed lesson subjects to max_level_granted', async () => {
+  const db = await NodeTestDatabase.open();
+  await migrateDatabase(db);
+  try {
+    const highSubject = {
+      ...kanjiFixture,
+      id: 402,
+      url: 'https://api.wanikani.com/v2/subjects/402',
+      data: { ...kanjiFixture.data, level: 4 },
+    };
+    const users = new ResourceRepository(db);
+    await users.replaceUser(userWithMaxLevel(3));
+    await new SubjectRepository(db).replaceSubjects(
+      [kanjiFixture, highSubject],
+      null,
+    );
+    const repository = new SessionRepository(db);
+    const snapshot = await repository.startLessonSession(
+      [candidate(kanjiFixture.id), candidate(highSubject.id)],
+      NOW,
+    );
+
+    await expect(repository.loadLessonSubjects(snapshot)).resolves.toEqual([
+      kanjiFixture,
+    ]);
+
+    await users.replaceUser(userWithMaxLevel(60));
+    await expect(repository.loadLessonSubjects(snapshot)).resolves.toEqual([
+      kanjiFixture,
+      highSubject,
     ]);
   } finally {
     await db.close();
@@ -261,4 +304,25 @@ async function seedSubject(
       }),
     ],
   );
+}
+
+function userWithMaxLevel(
+  maxLevelGranted: number,
+): Resource<UserData, 'user'> {
+  const fullAccess = maxLevelGranted === 60;
+  return {
+    ...userFixture,
+    data: {
+      ...userFixture.data,
+      subscription: {
+        ...userFixture.data.subscription,
+        active: fullAccess,
+        max_level_granted: maxLevelGranted,
+        period_ends_at: fullAccess
+          ? userFixture.data.subscription.period_ends_at
+          : null,
+        type: fullAccess ? 'recurring' : 'free',
+      },
+    },
+  };
 }

@@ -1,5 +1,6 @@
 import { fireEvent, screen } from '@testing-library/react-native';
 
+import type { Resource, UserData } from '@/api/types';
 import { migrateDatabase } from '@/db/migrate';
 import { NodeTestDatabase } from '@/db/NodeTestDatabase';
 import { AssignmentRepository } from '@/db/repositories/AssignmentRepository';
@@ -70,6 +71,83 @@ test('loads complete subject details and API relationships from local data', asy
         amalgamations: [
           expect.objectContaining({ id: vocabularyFixture.id }),
         ],
+      }),
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+test('hides direct and related subjects above max_level_granted', async () => {
+  const db = await NodeTestDatabase.open();
+  await migrateDatabase(db);
+  try {
+    const base = {
+      ...kanjiFixture,
+      data: {
+        ...kanjiFixture.data,
+        amalgamation_subject_ids: [402],
+        component_subject_ids: [401],
+        visually_similar_subject_ids: [403],
+      },
+    };
+    const highRadical = {
+      ...radicalFixture,
+      id: 401,
+      url: 'https://api.wanikani.com/v2/subjects/401',
+      data: { ...radicalFixture.data, level: 4 },
+    };
+    const highVocabulary = {
+      ...vocabularyFixture,
+      id: 402,
+      url: 'https://api.wanikani.com/v2/subjects/402',
+      data: { ...vocabularyFixture.data, level: 4 },
+    };
+    const highKanji = {
+      ...kanjiFixture,
+      id: 403,
+      url: 'https://api.wanikani.com/v2/subjects/403',
+      data: { ...kanjiFixture.data, level: 4 },
+    };
+    const users = new ResourceRepository(db);
+    await users.replaceUser(userWithMaxLevel(3));
+    await new SubjectRepository(db).replaceSubjects(
+      [base, highRadical, highVocabulary, highKanji],
+      null,
+    );
+
+    await expect(
+      loadSubjectDetails(db, highKanji.id, {
+        includeSimilarAboveLevel: true,
+      }),
+    ).rejects.toThrow(`Unknown subject ${highKanji.id}`);
+    await expect(
+      loadSubjectDetails(db, base.id, { includeSimilarAboveLevel: true }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        amalgamations: [],
+        components: [],
+        similarKanji: [],
+      }),
+    );
+
+    await users.replaceUser(userWithMaxLevel(60));
+    await expect(
+      loadSubjectDetails(db, highKanji.id, {
+        includeSimilarAboveLevel: true,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        subject: expect.objectContaining({ id: highKanji.id }),
+      }),
+    );
+    await expect(
+      loadSubjectDetails(db, base.id, { includeSimilarAboveLevel: true }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        amalgamations: [expect.objectContaining({ id: highVocabulary.id })],
+        components: [expect.objectContaining({ id: highRadical.id })],
+        similarKanji: [expect.objectContaining({ id: highKanji.id })],
       }),
     );
   } finally {
@@ -237,5 +315,26 @@ function detailsFixture(): SubjectDetailsSnapshot {
         primaryMeaning: 'Two',
       },
     ],
+  };
+}
+
+function userWithMaxLevel(
+  maxLevelGranted: number,
+): Resource<UserData, 'user'> {
+  const fullAccess = maxLevelGranted === 60;
+  return {
+    ...userFixture,
+    data: {
+      ...userFixture.data,
+      subscription: {
+        ...userFixture.data.subscription,
+        active: fullAccess,
+        max_level_granted: maxLevelGranted,
+        period_ends_at: fullAccess
+          ? userFixture.data.subscription.period_ends_at
+          : null,
+        type: fullAccess ? 'recurring' : 'free',
+      },
+    },
   };
 }

@@ -4,6 +4,7 @@ import { Platform } from 'react-native';
 import type { Database } from '@/db/Database';
 import { NOT_EXCLUDED } from '@/db/repositories/AssignmentRepository';
 import { DerivedRepository } from '@/db/repositories/DerivedRepository';
+import { SUBJECT_WITHIN_GRANTED_LEVEL } from '@/db/subscription';
 import {
   buildReviewNotificationSchedule,
   type ReviewNotificationInput,
@@ -162,7 +163,7 @@ export async function loadReviewNotificationInput(
          AND a.available_at > ?
          AND a.hidden = 0
          AND s.hidden_at IS NULL
-         AND s.level <= (SELECT max_level_granted FROM user LIMIT 1)
+         AND ${SUBJECT_WITHIN_GRANTED_LEVEL}
          AND ${NOT_EXCLUDED}
        ORDER BY a.available_at`,
       [now.toISOString()],

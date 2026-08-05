@@ -1,4 +1,5 @@
 import type { Database } from '../Database';
+import { SUBJECT_WITHIN_GRANTED_LEVEL } from '../subscription';
 import {
   BASE_ASSIGNMENT_QUERY,
   NOT_EXCLUDED,
@@ -42,7 +43,7 @@ export class DerivedRepository {
          AND a.available_at <= ?
          AND a.hidden = 0
          AND s.hidden_at IS NULL
-         AND s.level <= (SELECT max_level_granted FROM user LIMIT 1)
+         AND ${SUBJECT_WITHIN_GRANTED_LEVEL}
          AND ${NOT_EXCLUDED}
        ORDER BY a.available_at, s.level, s.lesson_position, s.id`,
       [now.toISOString()],
@@ -58,7 +59,7 @@ export class DerivedRepository {
        WHERE a.srs_stage BETWEEN 1 AND 8
          AND a.available_at > ? AND a.available_at <= ?
          AND a.hidden = 0 AND s.hidden_at IS NULL
-         AND s.level <= (SELECT max_level_granted FROM user LIMIT 1)
+         AND ${SUBJECT_WITHIN_GRANTED_LEVEL}
          AND ${NOT_EXCLUDED}
        ORDER BY a.available_at, s.id`,
       [

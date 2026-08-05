@@ -1,6 +1,18 @@
+import type { Resource, UserData } from '@/api/types';
+import { migrateDatabase } from '@/db/migrate';
+import { NodeTestDatabase } from '@/db/NodeTestDatabase';
+import { ResourceRepository } from '@/db/repositories/ResourceRepository';
+import { ReviewStatisticRepository } from '@/db/repositories/ReviewStatisticRepository';
+import { SubjectRepository } from '@/db/repositories/SubjectRepository';
+import {
+  kanjiFixture,
+  reviewStatisticFixture,
+  userFixture,
+} from '@/fixtures/api';
 import {
   calculateAnalytics,
   type AnalyticsInput,
+  loadAnalyticsSnapshot,
 } from '../calculations';
 
 const NOW = new Date('2026-07-29T12:00:00.000Z');
@@ -57,6 +69,53 @@ test('returns stable empty analytics without NaN values', () => {
     weakest: [],
     leeches: [],
   });
+});
+
+test('limits subject analytics to max_level_granted', async () => {
+  const db = await NodeTestDatabase.open();
+  await migrateDatabase(db);
+  try {
+    const highSubject = {
+      ...kanjiFixture,
+      id: 402,
+      url: 'https://api.wanikani.com/v2/subjects/402',
+      data: { ...kanjiFixture.data, level: 4 },
+    };
+    const highStatistic = {
+      ...reviewStatisticFixture,
+      id: 902,
+      url: 'https://api.wanikani.com/v2/review_statistics/902',
+      data: {
+        ...reviewStatisticFixture.data,
+        subject_id: highSubject.id,
+      },
+    };
+    const users = new ResourceRepository(db);
+    await users.replaceUser(userWithMaxLevel(3));
+    await new SubjectRepository(db).replaceSubjects(
+      [kanjiFixture, highSubject],
+      null,
+    );
+    await new ReviewStatisticRepository(db).replaceReviewStatistics(
+      [reviewStatisticFixture, highStatistic],
+      null,
+    );
+
+    await expect(loadAnalyticsSnapshot(db, NOW)).resolves.toEqual(
+      expect.objectContaining({
+        strongest: [expect.objectContaining({ id: kanjiFixture.id })],
+      }),
+    );
+
+    await users.replaceUser(userWithMaxLevel(60));
+    const paid = await loadAnalyticsSnapshot(db, NOW);
+    expect(paid.strongest.map(({ id }) => id)).toEqual([
+      kanjiFixture.id,
+      highSubject.id,
+    ]);
+  } finally {
+    await db.close();
+  }
 });
 
 function fixture(): AnalyticsInput {
@@ -157,5 +216,26 @@ function fixture(): AnalyticsInput {
         subjectHidden: true,
       },
     ],
+  };
+}
+
+function userWithMaxLevel(
+  maxLevelGranted: number,
+): Resource<UserData, 'user'> {
+  const fullAccess = maxLevelGranted === 60;
+  return {
+    ...userFixture,
+    data: {
+      ...userFixture.data,
+      subscription: {
+        ...userFixture.data.subscription,
+        active: fullAccess,
+        max_level_granted: maxLevelGranted,
+        period_ends_at: fullAccess
+          ? userFixture.data.subscription.period_ends_at
+          : null,
+        type: fullAccess ? 'recurring' : 'free',
+      },
+    },
   };
 }

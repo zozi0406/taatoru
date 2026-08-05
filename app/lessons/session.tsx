@@ -9,6 +9,7 @@ import {
   type LessonSessionSnapshot,
   SessionRepository,
 } from '@/features/sessions/SessionRepository';
+import { reconcileLessonSession } from '@/features/sessions/sessionSubjects';
 import { useTheme } from '@/ui/theme/ThemeProvider';
 
 export default function LessonSessionRoute() {
@@ -32,8 +33,18 @@ export default function LessonSessionRoute() {
           return;
         }
         const loadedSubjects = await sessions.loadLessonSubjects(loaded);
+        const reconciled = reconcileLessonSession(loaded, loadedSubjects);
+        if (reconciled === null) {
+          await sessions.clearLessonSession();
+          router.replace('/lessons/picker');
+          return;
+        }
+        const restored =
+          reconciled === loaded
+            ? loaded
+            : await sessions.saveLessonSession(reconciled);
         if (active) {
-          setSnapshot(loaded);
+          setSnapshot(restored);
           setSubjects(loadedSubjects);
         }
       })
