@@ -43,6 +43,32 @@ test('sends documented authentication and revision headers', async () => {
   );
 });
 
+test('updates its public budget from server rate-limit headers', async () => {
+  const fetch = jest.fn().mockResolvedValue(
+    jsonResponse(userFixture, {
+      headers: {
+        Date: 'Thu, 01 Jan 1970 00:00:10 GMT',
+        'RateLimit-Limit': '120',
+        'RateLimit-Remaining': '17',
+        'RateLimit-Reset': '20',
+      },
+    }),
+  );
+  const api = new HttpWaniKaniApi({
+    token: 'secret',
+    fetch,
+    now: () => 10_000,
+  });
+
+  await api.getUser();
+
+  expect(api.rateLimit).toMatchObject({
+    limit: 120,
+    requestsInServerMinute: 103,
+    requestsRemaining: 17,
+  });
+});
+
 test('applies Tsurukame collection filters without losing the update cursor', async () => {
   const fetch = jest
     .fn()
@@ -89,7 +115,12 @@ test('decodes structured rate-limit errors without retaining query data', async 
       },
       {
         status: 429,
-        headers: { 'Retry-After': '30' },
+        headers: {
+          'RateLimit-Limit': '60',
+          'RateLimit-Remaining': '0',
+          'RateLimit-Reset': '99',
+          'Retry-After': '30',
+        },
       },
     ),
   );
@@ -110,6 +141,35 @@ test('decodes structured rate-limit errors without retaining query data', async 
     safeUrl: 'https://api.wanikani.com/v2/assignments',
     isHibernating: false,
   });
+  expect((error as ApiError).retryAt?.getTime()).toBe(31_000);
+  expect(api.rateLimit).toMatchObject({
+    limit: 60,
+    requestsRemaining: 0,
+  });
+});
+
+test('uses RateLimit-Reset when a rate-limit response omits Retry-After', async () => {
+  const fetch = jest.fn().mockResolvedValue(
+    jsonResponse(
+      {
+        error: 'Rate limit exceeded',
+        code: 429,
+      },
+      {
+        status: 429,
+        headers: { 'RateLimit-Reset': '31' },
+      },
+    ),
+  );
+  const api = new HttpWaniKaniApi({
+    token: 'secret',
+    fetch,
+    now: () => 1_000,
+  });
+
+  const error = await api.getUser().catch((caught: unknown) => caught);
+
+  expect(error).toBeInstanceOf(ApiError);
   expect((error as ApiError).retryAt?.getTime()).toBe(31_000);
 });
 

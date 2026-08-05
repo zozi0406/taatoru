@@ -359,9 +359,9 @@ export class HttpWaniKaniApi implements WaniKaniApi {
     const responseReceivedAtMs = this.now();
     this.rateLimitTracker.recordResponse({
       serverDate: response.headers.get('Date'),
-      rateLimitLimit: null,
-      rateLimitRemaining: null,
-      rateLimitReset: null,
+      rateLimitLimit: response.headers.get('RateLimit-Limit'),
+      rateLimitRemaining: response.headers.get('RateLimit-Remaining'),
+      rateLimitReset: response.headers.get('RateLimit-Reset'),
       requestStartedAtMs,
       responseReceivedAtMs,
     });
