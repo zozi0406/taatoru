@@ -104,6 +104,33 @@ test('an invalid header set conservatively consumes an active server budget', ()
   expect(tracker.snapshot.requestsRemaining).toBe(16);
 });
 
+test('uses the local clock when a server budget omits a valid Date', () => {
+  const tracker = new RateLimitTracker(() => 10_000);
+  tracker.recordResponse({
+    serverDate: 'Thu, 01 Jan 1970 00:00:10 GMT',
+    rateLimitLimit: null,
+    rateLimitRemaining: null,
+    rateLimitReset: null,
+    requestStartedAtMs: 9_900,
+    responseReceivedAtMs: 10_000,
+  });
+  tracker.recordResponse({
+    serverDate: null,
+    rateLimitLimit: '120',
+    rateLimitRemaining: '17',
+    rateLimitReset: '20',
+    requestStartedAtMs: 10_000,
+    responseReceivedAtMs: 10_000,
+  });
+
+  expect(tracker.snapshot).toMatchObject({
+    limit: 120,
+    requestsRemaining: 17,
+    resetAfterMs: 10_000,
+    estimatedClockSkewMs: 0,
+  });
+});
+
 test('tracks the server minute, clock skew, and local reset time', () => {
   let now = 1_200;
   const tracker = new RateLimitTracker(() => now);

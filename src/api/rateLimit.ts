@@ -50,7 +50,8 @@ export class RateLimitTracker {
   recordResponse(timing: ResponseTiming): void {
     const serverDateMs =
       timing.serverDate === null ? NaN : Date.parse(timing.serverDate);
-    if (Number.isFinite(serverDateMs)) {
+    const hasValidServerDate = Number.isFinite(serverDateMs);
+    if (hasValidServerDate) {
       const roundTripMs = Math.max(
         0,
         timing.responseReceivedAtMs - timing.requestStartedAtMs,
@@ -67,6 +68,9 @@ export class RateLimitTracker {
     }
 
     const reportedBudget = parseServerBudget(timing);
+    if (reportedBudget !== null && !hasValidServerDate) {
+      this.clockSkewMs = 0;
+    }
     const estimatedServerNow =
       timing.responseReceivedAtMs + this.clockSkewMs;
     const activeBudget =
