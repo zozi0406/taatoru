@@ -23,8 +23,17 @@ const MINUTE_MS = 60_000;
 
 interface ResponseTiming {
   readonly serverDate: string | null;
+  readonly rateLimitLimit: string | null;
+  readonly rateLimitRemaining: string | null;
+  readonly rateLimitReset: string | null;
   readonly requestStartedAtMs: number;
   readonly responseReceivedAtMs: number;
+}
+
+interface ServerBudget {
+  readonly limit: number;
+  readonly remaining: number;
+  readonly resetAtMs: number;
 }
 
 export class RateLimitTracker {
@@ -32,52 +41,101 @@ export class RateLimitTracker {
   private lastServerMinute: number | null = null;
   private requestCount = 0;
   private clockSkewMs = 0;
+  private serverBudget: ServerBudget | null = null;
 
   constructor(now: () => number = Date.now) {
     this.now = now;
   }
 
-  recordResponse({
-    serverDate,
-    requestStartedAtMs,
-    responseReceivedAtMs,
-  }: ResponseTiming): void {
-    if (serverDate === null) {
-      return;
+  recordResponse(timing: ResponseTiming): void {
+    const serverDateMs =
+      timing.serverDate === null ? NaN : Date.parse(timing.serverDate);
+    if (Number.isFinite(serverDateMs)) {
+      const roundTripMs = Math.max(
+        0,
+        timing.responseReceivedAtMs - timing.requestStartedAtMs,
+      );
+      this.clockSkewMs =
+        serverDateMs + roundTripMs / 2 - timing.responseReceivedAtMs;
+
+      const serverMinute = Math.floor(serverDateMs / MINUTE_MS);
+      if (serverMinute !== this.lastServerMinute) {
+        this.lastServerMinute = serverMinute;
+        this.requestCount = 0;
+      }
+      this.requestCount += 1;
     }
 
-    const serverDateMs = Date.parse(serverDate);
-    if (!Number.isFinite(serverDateMs)) {
-      return;
+    const reportedBudget = parseServerBudget(timing);
+    const estimatedServerNow =
+      timing.responseReceivedAtMs + this.clockSkewMs;
+    const activeBudget =
+      this.serverBudget !== null &&
+      this.serverBudget.resetAtMs > estimatedServerNow
+        ? this.serverBudget
+        : null;
+    if (reportedBudget !== null) {
+      if (
+        reportedBudget.resetAtMs <= estimatedServerNow ||
+        (activeBudget !== null &&
+          reportedBudget.resetAtMs < activeBudget.resetAtMs)
+      ) {
+        return;
+      }
+      if (
+        activeBudget === null ||
+        reportedBudget.resetAtMs > activeBudget.resetAtMs ||
+        reportedBudget.limit !== activeBudget.limit
+      ) {
+        this.serverBudget = reportedBudget;
+      } else {
+        this.serverBudget = {
+          ...activeBudget,
+          remaining: Math.min(
+            activeBudget.remaining,
+            reportedBudget.remaining,
+          ),
+        };
+      }
+    } else if (activeBudget !== null) {
+      this.serverBudget = {
+        ...activeBudget,
+        remaining: Math.max(0, activeBudget.remaining - 1),
+      };
     }
-
-    const roundTripMs = Math.max(
-      0,
-      responseReceivedAtMs - requestStartedAtMs,
-    );
-    this.clockSkewMs =
-      serverDateMs + roundTripMs / 2 - responseReceivedAtMs;
-
-    const serverMinute = Math.floor(serverDateMs / MINUTE_MS);
-    if (serverMinute !== this.lastServerMinute) {
-      this.lastServerMinute = serverMinute;
-      this.requestCount = 0;
-    }
-    this.requestCount += 1;
   }
 
   get snapshot(): RateLimitSnapshot {
+    const estimatedServerNow = this.now() + this.clockSkewMs;
+    if (this.serverBudget !== null) {
+      if (estimatedServerNow < this.serverBudget.resetAtMs) {
+        return {
+          limit: this.serverBudget.limit,
+          requestsInServerMinute:
+            this.serverBudget.limit - this.serverBudget.remaining,
+          requestsRemaining: this.serverBudget.remaining,
+          resetAfterMs: Math.max(
+            0,
+            this.serverBudget.resetAtMs - estimatedServerNow,
+          ),
+          estimatedClockSkewMs: this.clockSkewMs,
+        };
+      }
+      this.serverBudget = null;
+      this.lastServerMinute = null;
+      this.requestCount = 0;
+    }
+
     if (this.lastServerMinute === null) {
       return {
         limit: RATE_LIMIT,
         requestsInServerMinute: 0,
         requestsRemaining: RATE_LIMIT,
         resetAfterMs: 0,
-        estimatedClockSkewMs: 0,
+        estimatedClockSkewMs: this.clockSkewMs,
       };
     }
 
-    const estimatedServerNow = this.now() + this.clockSkewMs;
     const currentServerMinute = Math.floor(estimatedServerNow / MINUTE_MS);
     if (currentServerMinute > this.lastServerMinute) {
       return {
@@ -105,4 +163,33 @@ export class RateLimitTracker {
       estimatedClockSkewMs: this.clockSkewMs,
     };
   }
+}
+
+function parseServerBudget({
+  rateLimitLimit,
+  rateLimitRemaining,
+  rateLimitReset,
+}: ResponseTiming): ServerBudget | null {
+  const limit = parseNonNegativeInteger(rateLimitLimit);
+  const remaining = parseNonNegativeInteger(rateLimitRemaining);
+  const resetSeconds = parseNonNegativeInteger(rateLimitReset);
+  if (
+    limit === null ||
+    limit === 0 ||
+    remaining === null ||
+    remaining > limit ||
+    resetSeconds === null ||
+    resetSeconds > Number.MAX_SAFE_INTEGER / 1000
+  ) {
+    return null;
+  }
+  return { limit, remaining, resetAtMs: resetSeconds * 1000 };
+}
+
+function parseNonNegativeInteger(value: string | null): number | null {
+  if (value === null || !/^\d+$/.test(value)) {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
 }
