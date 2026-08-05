@@ -431,7 +431,8 @@ Expected: all selected suites and tests pass with no warnings.
 
 ```bash
 git diff --check
-! git grep -nE 'TAATORU_LIVE_TOKEN|Authorization: Bearer [[:alnum:]-]{20,}'
+! rg -n 'Authorization: Bearer [[:alnum:]-]{20,}' . --glob '!node_modules/**' --glob '!.git/**'
+test "$(rg -n '[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}' . --glob '!node_modules/**' --glob '!.git/**' | rg -v '00000000-0000-4000-8000-000000000001|68bed05b-4efa-43d0-b82e-1f2cdb0a9cbc' | wc -l | tr -d ' ')" = 0
 ```
 
 Expected: both commands exit 0 with no matching credential output.
