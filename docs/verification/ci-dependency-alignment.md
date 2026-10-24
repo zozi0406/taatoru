@@ -13,3 +13,9 @@ Checks completed with Node 22:
 - `git diff --check` passed.
 
 These checks validate installation, tests, dependency compatibility and native project generation. The updated native dependencies have not been rebuilt into or exercised in a new device binary in this CI repair.
+
+## Review feedback: incremental reading input
+
+The review identified that a trailing `m` became `ん` before the following vowel could arrive. Character-by-character tests through both the review and lesson inputs reproduced ten failures, while four existing `n` cases passed. The input now preserves unfinished `m` syllables and handles doubled `m` without losing the converter's small-tsu behavior.
+
+All 14 input cases now pass, covering `ma`, `yama`, `mya`, `mma`, `sempai`, `na` and `nn` in both flows. A fresh `npm run verify` passed lint, TypeScript, 305 tests across 57 suites and all 13 release checks after this correction.

@@ -407,10 +407,12 @@ export function StudyQuestion({
   );
 }
 
-/** Leave a trailing n unfinished so na/nya can still be typed on a Latin keyboard. */
+/** Keep nasal consonants unfinished until the next keystroke resolves the syllable. */
 export function kanaInput(value: string): string {
   if (/nn$/i.test(value)) return romajiToKana(value.slice(0, -2)).text + 'ん';
-  if (/n$/i.test(value)) return romajiToKana(value.slice(0, -1)).text + 'n';
+  if (/mm$/i.test(value)) return romajiToKana(value.slice(0, -2)).text + 'っm';
+  if (/[nm]$/i.test(value))
+    return romajiToKana(value.slice(0, -1)).text + value.slice(-1).toLowerCase();
   return romajiToKana(value).text;
 }
 
