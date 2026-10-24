@@ -9,6 +9,7 @@ import {
 import {
   ActivityIndicator,
   AppState,
+  Pressable,
   StyleSheet,
   Text,
   View,
@@ -25,10 +26,7 @@ import {
   AuthProvider,
   useAuth,
 } from '@/features/auth/AuthProvider';
-import {
-  SecureTokenStore,
-  type TokenStore,
-} from '@/features/auth/tokenStore';
+import { SecureTokenStore, type TokenStore } from '@/features/auth/tokenStore';
 import { ConnectivityUploadRetry } from '@/features/connectivity/ConnectivityUploadRetry';
 import { PendingWriteSender } from '@/features/sync/PendingWriteSender';
 import {
@@ -36,9 +34,7 @@ import {
   loadReviewNotificationInput,
   NotificationService,
 } from '@/features/notifications/NotificationService';
-import {
-  registerReviewBackgroundTask,
-} from '@/features/notifications/backgroundTask';
+import { registerReviewBackgroundTask } from '@/features/notifications/backgroundTask';
 import {
   type SyncEngine,
   type SyncMode,
@@ -63,6 +59,7 @@ export function AppProviders({ children }: PropsWithChildren) {
   const theme = useTheme();
   const [services, setServices] = useState<AppServices | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -70,12 +67,13 @@ export function AppProviders({ children }: PropsWithChildren) {
     void (async () => {
       try {
         const openedDatabase = await ExpoDatabase.open();
-        await migrateDatabase(openedDatabase);
         if (!active) {
           await openedDatabase.close();
           return;
         }
         database = openedDatabase;
+        await migrateDatabase(openedDatabase);
+        if (!active) return;
         const tokenStore = new SecureTokenStore();
         const syncRepository = new SyncRepository(openedDatabase);
         const notificationService = new NotificationService(
@@ -155,6 +153,10 @@ export function AppProviders({ children }: PropsWithChildren) {
           });
         }
       } catch (bootstrapError) {
+        const failedDatabase = database;
+        database = null;
+        if (failedDatabase !== null)
+          await failedDatabase.close().catch(() => undefined);
         if (active) {
           setError(
             bootstrapError instanceof Error
@@ -168,10 +170,12 @@ export function AppProviders({ children }: PropsWithChildren) {
     return () => {
       active = false;
       if (database !== null) {
-        void database.close();
+        const closingDatabase = database;
+        database = null;
+        void closingDatabase.close().catch(() => undefined);
       }
     };
-  }, []);
+  }, [bootstrapAttempt]);
 
   useEffect(() => {
     if (services === null) {
@@ -193,21 +197,44 @@ export function AppProviders({ children }: PropsWithChildren) {
     return (
       <SafeAreaProvider>
         <View
-          style={[
-            styles.loading,
-            { backgroundColor: theme.colors.canvas },
-          ]}
+          style={[styles.loading, { backgroundColor: theme.colors.canvas }]}
         >
           {error === null ? (
             <ActivityIndicator accessibilityLabel="Opening Taatoru" />
           ) : (
-            <Text
-              accessibilityRole="alert"
-              selectable
-              style={{ color: theme.colors.danger }}
-            >
-              {error}
-            </Text>
+            <View style={{ gap: 16, padding: 24 }}>
+              <Text
+                accessibilityRole="alert"
+                style={[theme.typography.body, { color: theme.colors.danger }]}
+              >
+                Unable to open your local library. Please try again.
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Retry opening Taatoru"
+                onPress={() => {
+                  setError(null);
+                  setBootstrapAttempt((value) => value + 1);
+                }}
+                style={{
+                  minHeight: 48,
+                  padding: 14,
+                  borderRadius: 12,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: theme.colors.accent,
+                }}
+              >
+                <Text
+                  style={[
+                    theme.typography.label,
+                    { color: theme.colors.accentForeground },
+                  ]}
+                >
+                  Try again
+                </Text>
+              </Pressable>
+            </View>
           )}
         </View>
       </SafeAreaProvider>

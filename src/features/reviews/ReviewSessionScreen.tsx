@@ -1,26 +1,30 @@
 import { useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
-
 import type { SubjectResource } from '@/api/types';
-import { minimumTouchTarget } from '@/ui/theme/spacing';
-import { useTheme } from '@/ui/theme/ThemeProvider';
-import { checkAnswer } from './answerChecker';
+import {
+  DEFAULT_STUDY_SETTINGS,
+  type StudySettings,
+} from '@/features/settings/studySettings';
+import type { SubjectStudyMaterial } from '@/features/subjects/subjectDetails';
+import { useStudyAnswer } from '@/features/sessions/useStudyAnswer';
+import { StudyCompletion } from '@/features/sessions/StudyCompletion';
+import { useStudyAudio } from '@/features/sessions/useStudyAudio';
 import { ReviewPrompt } from './ReviewPrompt';
 import type { ReviewSessionSnapshot } from './ReviewSessionRepository';
-import {
-  reduceReview,
-  type ReviewEvent,
-  type ReviewTransition,
-} from './reviewReducer';
+import { reduceReview, type ReviewTransition } from './reviewReducer';
 
 interface ReviewSessionScreenProps {
   readonly initialSnapshot: ReviewSessionSnapshot;
-  readonly onCommitTransition: (
-    transition: ReviewTransition,
-  ) => Promise<void>;
+  readonly onCommitTransition: (transition: ReviewTransition) => Promise<void>;
   readonly onExit: () => void;
   readonly onFinish: () => Promise<void>;
   readonly subjects: readonly SubjectResource[];
+  readonly settings?: StudySettings;
+  readonly studyMaterials?: Readonly<Record<number, SubjectStudyMaterial>>;
+  readonly onAddSynonym?: (subjectId: number, synonym: string) => Promise<void>;
+  readonly onReload?: () => Promise<void>;
+  readonly onSettings?: () => void;
+  readonly onOpenSubject?: (id: number) => void;
+  readonly onPlayAudio?: (url: string) => void;
 }
 
 export function ReviewSessionScreen({
@@ -29,135 +33,104 @@ export function ReviewSessionScreen({
   onExit,
   onFinish,
   subjects,
+  settings = DEFAULT_STUDY_SETTINGS,
+  studyMaterials = {},
+  onAddSynonym,
+  onReload,
+  onSettings,
+  onPlayAudio,
+  onOpenSubject,
 }: ReviewSessionScreenProps) {
-  const theme = useTheme();
   const [snapshot, setSnapshot] = useState(initialSnapshot);
-  const [feedback, setFeedback] =
-    useState<'correct' | 'incorrect' | 'retry' | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const byId = new Map(subjects.map((subject) => [subject.id!, subject]));
+  const playAudio = useStudyAudio(onPlayAudio);
   const types = Object.fromEntries(
-    subjects.map((subject) => [subject.id!, subject.object]),
+    subjects.map((subject) => [subject.id, subject.object]),
   );
-
-  const transition = async (event: ReviewEvent) => {
-    const result = reduceReview(snapshot, event, types);
-    try {
-      setError(null);
+  const actions = useStudyAnswer({
+    settings,
+    kind: 'review',
+    onAddSynonym,
+    apply: async (type) => {
+      const result = reduceReview(snapshot, { type }, types, settings);
       await onCommitTransition(result);
       setSnapshot(result.snapshot);
-    } catch {
-      setError('Unable to preserve review progress.');
-    }
-  };
-
-  if (snapshot.phase === 'complete') {
+      const current = subjects.find(
+        ({ id }) => id === snapshot.items[snapshot.queuePosition]?.subjectId,
+      );
+      if (
+        type === 'correct' &&
+        snapshot.currentPrompt === 'reading' &&
+        settings.autoplay &&
+        current !== undefined &&
+        'pronunciation_audios' in current.data
+      ) {
+        const audio = current.data.pronunciation_audios[0];
+        if (audio !== undefined) playAudio(audio.url);
+      }
+    },
+  });
+  if (snapshot.phase === 'complete')
     return (
-      <View
-        style={{
-          alignItems: 'center',
-          backgroundColor: theme.colors.canvas,
-          flex: 1,
-          gap: theme.spacing.xl,
-          justifyContent: 'center',
-          padding: theme.spacing.xl,
-        }}
-      >
-        <Text
-          accessibilityRole="header"
-          style={[theme.typography.screenTitle, { color: theme.colors.text }]}
-        >
-          Reviews complete
-        </Text>
-        <Text style={[theme.typography.body, { color: theme.colors.textMuted }]}>
-          {snapshot.items.length} review
-          {snapshot.items.length === 1 ? '' : 's'} recorded on this device.
-        </Text>
-        <Pressable
-          accessibilityLabel="Finish reviews"
-          accessibilityRole="button"
-          onPress={() => void onFinish()}
-          style={{
-            alignItems: 'center',
-            backgroundColor: theme.colors.accent,
-            borderRadius: 14,
-            justifyContent: 'center',
-            minHeight: minimumTouchTarget,
-            paddingHorizontal: theme.spacing.xl,
-          }}
-        >
-          <Text
-            style={[
-              theme.typography.label,
-              { color: theme.colors.accentForeground },
-            ]}
-          >
-            Finish
-          </Text>
-        </Pressable>
-      </View>
-    );
-  }
-
-  const item = snapshot.items[snapshot.queuePosition];
-  const subject = item === undefined ? undefined : byId.get(item.subjectId);
-  if (subject === undefined || snapshot.currentPrompt === null) {
-    return (
-      <View
-        style={{
-          backgroundColor: theme.colors.canvas,
-          flex: 1,
-          justifyContent: 'center',
-          padding: theme.spacing.xl,
-        }}
-      >
-        <Text accessibilityRole="alert" style={{ color: theme.colors.danger }}>
-          This review subject is no longer available on this device.
-        </Text>
-      </View>
-    );
-  }
-
-  return (
-    <View style={{ flex: 1 }}>
-      <ReviewPrompt
-        key={`${subject.id}-${snapshot.currentPrompt}`}
-        feedback={feedback}
-        index={snapshot.queuePosition}
-        onExit={onExit}
-        onSubmit={(answer) => {
-          const result = checkAnswer({
-            answer,
-            prompt: snapshot.currentPrompt!,
-            subject,
-          });
-          if (result.verdict === 'retry') {
-            setFeedback('retry');
-            return;
-          }
-          setFeedback(
-            result.verdict === 'correct' ? 'correct' : 'incorrect',
-          );
-          void transition({
-            type: result.verdict === 'correct' ? 'correct' : 'incorrect',
-          });
-        }}
-        prompt={snapshot.currentPrompt}
-        subject={subject}
-        total={snapshot.items.length}
+      <StudyCompletion
+        title="Reviews complete"
+        count={snapshot.queuePosition}
+        detail="reviews recorded on this device"
+        finishLabel="Finish reviews"
+        onFinish={onFinish}
       />
-      {error === null ? null : (
-        <Text
-          accessibilityRole="alert"
-          style={{
-            backgroundColor: theme.colors.dangerSurface,
-            color: theme.colors.danger,
-            padding: theme.spacing.md,
-          }}
-        >
-          {error}
-        </Text>
-      )}
-    </View>
+    );
+  const item = snapshot.items[snapshot.queuePosition];
+  const subject = subjects.find(({ id }) => id === item?.subjectId);
+  if (subject === undefined || snapshot.currentPrompt === null)
+    return (
+      <StudyCompletion
+        title="Review needs attention"
+        count={0}
+        detail="This subject is no longer available. Return home to refresh your library."
+        finishLabel="Return home"
+        onFinish={async () => onExit()}
+      />
+    );
+  return (
+    <ReviewPrompt
+      key={`${subject.id}-${snapshot.currentPrompt}-${actions.revision}`}
+      feedback={actions.feedback}
+      busy={actions.busy}
+      error={actions.error}
+      settings={settings}
+      index={snapshot.queuePosition}
+      total={snapshot.items.length}
+      subject={subject}
+      prompt={snapshot.currentPrompt}
+      onExit={onExit}
+      onSettings={onSettings}
+      onOpenSubject={onOpenSubject}
+      onPlayAudio={playAudio}
+      onSubmit={(answer) =>
+        actions.submit(
+          answer,
+          snapshot.currentPrompt!,
+          subject,
+          studyMaterials[subject.id]?.meaningSynonyms,
+        )
+      }
+      onContinue={actions.continue}
+      onOverride={actions.override}
+      onSkip={actions.skip}
+      onRetrySave={actions.retrySave}
+      onReload={
+        onReload === undefined
+          ? undefined
+          : () => {
+              void onReload();
+            }
+      }
+      material={studyMaterials[subject.id]}
+      onAddSynonym={
+        actions.addSynonym === undefined
+          ? undefined
+          : (answer) => actions.addSynonym!(subject.id, answer)
+      }
+    />
   );
 }

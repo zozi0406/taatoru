@@ -1,4 +1,4 @@
-import type { Database } from '../Database';
+import type { DatabaseTransaction } from '../Database';
 import { SUBJECT_WITHIN_GRANTED_LEVEL } from '../subscription';
 import {
   BASE_ASSIGNMENT_QUERY,
@@ -32,11 +32,9 @@ interface LeechRow extends AvailableAssignment {
 }
 
 export class DerivedRepository {
-  constructor(private readonly db: Database) {}
+  constructor(private readonly db: DatabaseTransaction) {}
 
-  getAvailableReviews(
-    now: Date,
-  ): Promise<readonly AvailableAssignment[]> {
+  getAvailableReviews(now: Date): Promise<readonly AvailableAssignment[]> {
     return this.db.all(
       `${BASE_ASSIGNMENT_QUERY}
        WHERE a.srs_stage BETWEEN 1 AND 8
@@ -74,7 +72,10 @@ export class DerivedRepository {
       );
       counts.set(bucket, (counts.get(bucket) ?? 0) + 1);
     }
-    return [...counts].map(([hoursFromNow, count]) => ({ hoursFromNow, count }));
+    return [...counts].map(([hoursFromNow, count]) => ({
+      hoursFromNow,
+      count,
+    }));
   }
 
   async getSrsCounts(): Promise<SrsCounts> {
@@ -95,9 +96,7 @@ export class DerivedRepository {
     return result;
   }
 
-  async getLeeches(
-    threshold: number,
-  ): Promise<readonly AvailableAssignment[]> {
+  async getLeeches(threshold: number): Promise<readonly AvailableAssignment[]> {
     const rows = await this.db.all<LeechRow>(
       `SELECT
          a.id AS assignmentId,
@@ -116,10 +115,7 @@ export class DerivedRepository {
        ORDER BY s.level, s.lesson_position, s.id`,
     );
     return rows.filter((row) => {
-      const incorrect = Math.max(
-        row.meaningIncorrect,
-        row.readingIncorrect,
-      );
+      const incorrect = Math.max(row.meaningIncorrect, row.readingIncorrect);
       const streak = Math.min(
         row.meaningCurrentStreak,
         row.readingCurrentStreak,

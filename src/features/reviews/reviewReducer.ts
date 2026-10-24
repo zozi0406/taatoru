@@ -1,4 +1,9 @@
 import type { SubjectObject } from '@/api/types';
+import {
+  DEFAULT_STUDY_SETTINGS,
+  type StudySettings,
+} from '@/features/settings/studySettings';
+import { advanceStudyQuestion } from '@/features/sessions/studyScheduler';
 import type {
   CompletedReviewItem,
   ReviewSessionSnapshot,
@@ -6,7 +11,10 @@ import type {
 
 export type ReviewEvent =
   | { readonly type: 'correct' }
-  | { readonly type: 'incorrect' };
+  | { readonly type: 'incorrect' }
+  | { readonly type: 'continue-incorrect' }
+  | { readonly type: 'override-correct' }
+  | { readonly type: 'skip' };
 
 export interface ReviewTransition {
   readonly completedItem: CompletedReviewItem | null;
@@ -17,6 +25,7 @@ export function reduceReview(
   snapshot: ReviewSessionSnapshot,
   event: ReviewEvent,
   subjectTypes: Readonly<Record<number, SubjectObject>>,
+  options: StudySettings = DEFAULT_STUDY_SETTINGS,
 ): ReviewTransition {
   const item = snapshot.items[snapshot.queuePosition];
   if (
@@ -42,35 +51,72 @@ export function reduceReview(
       },
     };
   }
-  if (
-    snapshot.currentPrompt === 'meaning' &&
-    requiresReading(subjectTypes[item.subjectId])
-  ) {
-    return {
-      completedItem: null,
-      snapshot: { ...snapshot, currentPrompt: 'reading' },
-    };
+  const key =
+    snapshot.currentPrompt === 'meaning'
+      ? 'incorrectMeaningBySubject'
+      : 'incorrectReadingBySubject';
+  const counts =
+    event.type === 'override-correct'
+      ? {
+          ...snapshot[key],
+          [item.subjectId]: Math.max(
+            0,
+            (snapshot[key][item.subjectId] ?? 0) - 1,
+          ),
+        }
+      : snapshot[key];
+  const adjusted = { ...snapshot, [key]: counts };
+  if (event.type === 'skip') {
+    adjusted.incorrectMeaningBySubject = Object.fromEntries(
+      Object.entries(adjusted.incorrectMeaningBySubject).filter(
+        ([id]) => Number(id) !== item.subjectId,
+      ),
+    );
+    adjusted.incorrectReadingBySubject = Object.fromEntries(
+      Object.entries(adjusted.incorrectReadingBySubject).filter(
+        ([id]) => Number(id) !== item.subjectId,
+      ),
+    );
   }
-
-  const nextPosition = snapshot.queuePosition + 1;
-  const complete = nextPosition >= snapshot.items.length;
+  // Older sessions always asked meaning first and stored no completed-half state.
+  const progress =
+    snapshot.questionProgress ??
+    (snapshot.currentPrompt === 'reading'
+      ? { answeredMeaningSubjectIds: [item.subjectId] }
+      : {});
+  const next = advanceStudyQuestion({
+    items: snapshot.items,
+    position: snapshot.queuePosition,
+    prompt: snapshot.currentPrompt,
+    progress,
+    types: subjectTypes,
+    options,
+    event:
+      event.type === 'continue-incorrect'
+        ? 'retry'
+        : event.type === 'skip'
+          ? 'skip'
+          : 'correct',
+  });
+  const complete = next.position >= next.items.length;
   return {
-    completedItem: {
-      ...item,
-      incorrectMeaningAnswers:
-        snapshot.incorrectMeaningBySubject[item.subjectId] ?? 0,
-      incorrectReadingAnswers:
-        snapshot.incorrectReadingBySubject[item.subjectId] ?? 0,
-    },
+    completedItem:
+      next.completedSubjectId === null
+        ? null
+        : {
+            ...item,
+            incorrectMeaningAnswers:
+              adjusted.incorrectMeaningBySubject[item.subjectId] ?? 0,
+            incorrectReadingAnswers:
+              adjusted.incorrectReadingBySubject[item.subjectId] ?? 0,
+          },
     snapshot: {
-      ...snapshot,
-      currentPrompt: complete ? null : 'meaning',
+      ...adjusted,
+      items: next.items,
+      questionProgress: next.progress,
+      currentPrompt: next.prompt,
       phase: complete ? 'complete' : 'active',
-      queuePosition: nextPosition,
+      queuePosition: next.position,
     },
   };
-}
-
-function requiresReading(subjectType: SubjectObject | undefined): boolean {
-  return subjectType === 'kanji' || subjectType === 'vocabulary';
 }

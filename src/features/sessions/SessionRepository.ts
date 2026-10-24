@@ -3,12 +3,10 @@ import type { Database, DatabaseTransaction } from '@/db/Database';
 import { SUBJECT_WITHIN_GRANTED_LEVEL } from '@/db/subscription';
 import type { LessonCandidate } from '@/features/lessons/types';
 import { PendingWriteRepository } from '@/features/sync/PendingWriteRepository';
+import type { StudyQuestionProgress } from './studyScheduler';
 
 export type LessonSessionPhase =
-  | 'complete'
-  | 'presentation'
-  | 'quiz'
-  | 'selection';
+  'complete' | 'presentation' | 'quiz' | 'selection';
 export type LessonPrompt = 'meaning' | 'reading';
 
 export interface LessonSessionItem {
@@ -17,6 +15,7 @@ export interface LessonSessionItem {
 }
 
 export interface LessonQuizState {
+  readonly questionProgress?: StudyQuestionProgress;
   readonly completedSubjectIds: readonly number[];
   readonly currentPrompt: LessonPrompt | null;
   readonly currentSubjectId: number | null;
@@ -95,12 +94,13 @@ export class SessionRepository {
   ): Promise<LessonSessionSnapshot> {
     return this.db.transaction(async (tx) => {
       if (completedItem !== null) {
-        await new PendingWriteRepository(
-          this.db,
-        ).completeLessonInTransaction(tx, {
-          ...completedItem,
-          completedAt: now,
-        });
+        await new PendingWriteRepository(this.db).completeLessonInTransaction(
+          tx,
+          {
+            ...completedItem,
+            completedAt: now,
+          },
+        );
       }
       return this.saveLessonSessionWith(tx, snapshot, now);
     });
@@ -188,6 +188,15 @@ export class SessionRepository {
       .then(() => undefined);
   }
 
+  clearLessonSelection(): Promise<void> {
+    return this.db
+      .run(
+        `DELETE FROM active_sessions WHERE id = 'lesson'
+      AND kind = 'lesson' AND json_extract(state_json, '$.phase') = 'selection'`,
+      )
+      .then(() => undefined);
+  }
+
   private async writeLessonSession(
     candidates: readonly LessonCandidate[],
     phase: LessonSessionPhase,
@@ -206,32 +215,32 @@ export class SessionRepository {
       queuePosition: 0,
       quizState: EMPTY_QUIZ_STATE,
       createdAt:
-        phase === 'selection'
-          ? (existing?.createdAt ?? timestamp)
-          : timestamp,
+        phase === 'selection' ? (existing?.createdAt ?? timestamp) : timestamp,
       updatedAt: timestamp,
     };
-    await this.db.run(
+    const written = await this.db.run(
       `INSERT INTO active_sessions (
         id, kind, state_json, created_at, updated_at
       ) VALUES ('lesson', 'lesson', ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         kind = excluded.kind,
         state_json = excluded.state_json,
-        updated_at = excluded.updated_at`,
+        updated_at = excluded.updated_at
+      WHERE ? <> 'selection' OR json_extract(active_sessions.state_json, '$.phase') = 'selection'`,
       [
         JSON.stringify(toStoredState(snapshot)),
         snapshot.createdAt,
         snapshot.updatedAt,
+        phase,
       ],
     );
+    if (written.changes === 0)
+      throw new Error('A lesson session is already active.');
     return snapshot;
   }
 }
 
-function toStoredState(
-  snapshot: LessonSessionSnapshot,
-): StoredLessonState {
+function toStoredState(snapshot: LessonSessionSnapshot): StoredLessonState {
   return {
     phase: snapshot.phase,
     items: snapshot.items,

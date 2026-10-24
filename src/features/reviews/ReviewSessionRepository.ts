@@ -1,8 +1,14 @@
-import type { SubjectResource } from '@/api/types';
+import type { SubjectObject, SubjectResource } from '@/api/types';
 import type { Database, DatabaseTransaction } from '@/db/Database';
 import { SUBJECT_WITHIN_GRANTED_LEVEL } from '@/db/subscription';
+import { DerivedRepository } from '@/db/repositories/DerivedRepository';
 import { PendingWriteRepository } from '@/features/sync/PendingWriteRepository';
 import type { ReviewPrompt } from './types';
+import {
+  firstStudyPrompt,
+  type StudyQuestionProgress,
+} from '@/features/sessions/studyScheduler';
+import type { QuestionOrder } from '@/features/settings/studySettings';
 
 export type ReviewSessionPhase = 'active' | 'complete';
 
@@ -17,6 +23,7 @@ export interface CompletedReviewItem extends ReviewSessionItem {
 }
 
 export interface ReviewSessionSnapshot {
+  readonly questionProgress?: StudyQuestionProgress;
   readonly createdAt: string;
   readonly currentPrompt: ReviewPrompt | null;
   readonly id: 'review';
@@ -36,6 +43,7 @@ interface SessionRow {
 }
 
 interface StoredReviewState {
+  readonly questionProgress?: StudyQuestionProgress;
   readonly currentPrompt: ReviewPrompt | null;
   readonly incorrectMeaningBySubject: Readonly<Record<string, number>>;
   readonly incorrectReadingBySubject: Readonly<Record<string, number>>;
@@ -116,6 +124,102 @@ export class ReviewSessionRepository {
     return this.saveReviewSnapshotWith(this.db, snapshot, now);
   }
 
+  /** A sync or account reset can replace assignments while a session is saved. */
+  revalidateReviewSession(
+    snapshot: ReviewSessionSnapshot,
+    now = new Date(),
+    questionOrder: QuestionOrder = 'meaning-first',
+  ): Promise<ReviewSessionSnapshot> {
+    return this.db.transaction(async (tx) => {
+      if (snapshot.phase === 'complete') return snapshot;
+      const available = await new DerivedRepository(tx).getAvailableReviews(
+        now,
+      );
+      const bySubject = new Map(
+        available.map((item) => [item.subjectId, item]),
+      );
+      const resetIds = new Set<number>();
+      const remaining = snapshot.items
+        .slice(snapshot.queuePosition)
+        .flatMap((item) => {
+          const current = bySubject.get(item.subjectId);
+          if (current === undefined) {
+            resetIds.add(item.subjectId);
+            return [];
+          }
+          if (current.assignmentId !== item.assignmentId)
+            resetIds.add(item.subjectId);
+          return [
+            { subjectId: item.subjectId, assignmentId: current.assignmentId },
+          ];
+        });
+      if (resetIds.size === 0) return snapshot;
+      const previous = snapshot.items[snapshot.queuePosition];
+      const keepPrompt =
+        previous !== undefined && !resetIds.has(previous.subjectId);
+      const progress = snapshot.questionProgress ?? {
+        answeredMeaningSubjectIds:
+          snapshot.currentPrompt === 'reading' && previous !== undefined
+            ? [previous.subjectId]
+            : [],
+      };
+      const nextId = remaining[0]?.subjectId;
+      const successorPrompt =
+        nextId === undefined
+          ? null
+          : !resetIds.has(nextId) &&
+              progress.answeredMeaningSubjectIds?.includes(nextId)
+            ? 'reading'
+            : !resetIds.has(nextId) &&
+                progress.answeredReadingSubjectIds?.includes(nextId)
+              ? 'meaning'
+              : firstStudyPrompt(
+                  bySubject.get(nextId)?.subjectType as SubjectObject,
+                  questionOrder,
+                  nextId,
+                );
+      const items = [
+        ...snapshot.items.slice(0, snapshot.queuePosition),
+        ...remaining,
+      ];
+      const filterCounts = (counts: Readonly<Record<string, number>>) =>
+        Object.fromEntries(
+          Object.entries(counts).filter(([id]) => !resetIds.has(Number(id))),
+        );
+      return this.saveReviewSnapshotWith(
+        tx,
+        {
+          ...snapshot,
+          items,
+          phase: remaining.length === 0 ? 'complete' : 'active',
+          currentPrompt:
+            remaining.length === 0
+              ? null
+              : keepPrompt
+                ? snapshot.currentPrompt
+                : successorPrompt,
+          incorrectMeaningBySubject: filterCounts(
+            snapshot.incorrectMeaningBySubject,
+          ),
+          incorrectReadingBySubject: filterCounts(
+            snapshot.incorrectReadingBySubject,
+          ),
+          questionProgress: {
+            answeredMeaningSubjectIds:
+              progress.answeredMeaningSubjectIds?.filter(
+                (id) => !resetIds.has(id),
+              ),
+            answeredReadingSubjectIds:
+              progress.answeredReadingSubjectIds?.filter(
+                (id) => !resetIds.has(id),
+              ),
+          },
+        },
+        now,
+      );
+    });
+  }
+
   async loadReviewSubjects(
     snapshot: ReviewSessionSnapshot,
   ): Promise<readonly SubjectResource[]> {
@@ -147,12 +251,27 @@ export class ReviewSessionRepository {
   ): Promise<ReviewSessionSnapshot> {
     return this.db.transaction(async (tx) => {
       if (completedItem !== null) {
-        await new PendingWriteRepository(
-          this.db,
-        ).completeReviewInTransaction(tx, {
-          ...completedItem,
-          completedAt: now,
-        });
+        const available = await new DerivedRepository(tx).getAvailableReviews(
+          now,
+        );
+        if (
+          !available.some(
+            (item) =>
+              item.subjectId === completedItem.subjectId &&
+              item.assignmentId === completedItem.assignmentId,
+          )
+        ) {
+          throw new Error(
+            'Review availability changed. Reload reviews to continue.',
+          );
+        }
+        await new PendingWriteRepository(this.db).completeReviewInTransaction(
+          tx,
+          {
+            ...completedItem,
+            completedAt: now,
+          },
+        );
       }
       return this.saveReviewSnapshotWith(tx, snapshot, now);
     });
@@ -183,9 +302,7 @@ export class ReviewSessionRepository {
   }
 }
 
-function toStoredState(
-  snapshot: ReviewSessionSnapshot,
-): StoredReviewState {
+function toStoredState(snapshot: ReviewSessionSnapshot): StoredReviewState {
   return {
     phase: snapshot.phase,
     items: snapshot.items,
@@ -193,6 +310,7 @@ function toStoredState(
     currentPrompt: snapshot.currentPrompt,
     incorrectMeaningBySubject: snapshot.incorrectMeaningBySubject,
     incorrectReadingBySubject: snapshot.incorrectReadingBySubject,
+    questionProgress: snapshot.questionProgress,
   };
 }
 

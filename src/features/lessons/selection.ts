@@ -70,10 +70,11 @@ export class LessonSelection {
   constructor(
     candidates: readonly LessonCandidate[],
     restoredIds: readonly number[] = [],
+    private readonly maximum = Number.POSITIVE_INFINITY,
   ) {
     this.revalidate(candidates);
     for (const subjectId of restoredIds) {
-      if (this.availableIds.has(subjectId)) {
+      if (this.availableIds.has(subjectId) && !this.atLimit) {
         this.selected.add(subjectId);
       }
     }
@@ -85,6 +86,10 @@ export class LessonSelection {
 
   get selectedCount(): number {
     return this.selected.size;
+  }
+
+  get atLimit(): boolean {
+    return this.selected.size >= this.maximum;
   }
 
   get selectedIds(): readonly number[] {
@@ -109,14 +114,26 @@ export class LessonSelection {
     }
     if (this.selected.has(subjectId)) {
       this.selected.delete(subjectId);
-    } else {
+    } else if (!this.atLimit) {
       this.selected.add(subjectId);
     }
   }
 
+  select(subjectIds: readonly number[]): void {
+    const requestedIds = new Set(subjectIds);
+    for (const { subjectId } of this.candidates) {
+      if (this.atLimit) break;
+      if (requestedIds.has(subjectId)) this.selected.add(subjectId);
+    }
+  }
+
+  deselect(subjectIds: readonly number[]): void {
+    for (const subjectId of subjectIds) this.selected.delete(subjectId);
+  }
+
   revalidate(candidates: readonly LessonCandidate[]): void {
-    this.candidates = groupLessonCandidates(candidates).flatMap(({ sections }) =>
-      sections.flatMap(({ items }) => items),
+    this.candidates = groupLessonCandidates(candidates).flatMap(
+      ({ sections }) => sections.flatMap(({ items }) => items),
     );
     this.availableIds = new Set(
       this.candidates.map(({ subjectId }) => subjectId),

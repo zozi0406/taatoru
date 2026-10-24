@@ -1,14 +1,21 @@
 import type { TextStyle } from 'react-native';
 
 export const typography = {
-  screenTitle: {
-    fontSize: 30,
+  overline: {
+    fontSize: 11,
     fontWeight: '700',
-    letterSpacing: -0.5,
-    lineHeight: 36,
+    letterSpacing: 1.7,
+    lineHeight: 16,
+    textTransform: 'uppercase',
+  },
+  screenTitle: {
+    fontSize: 32,
+    fontWeight: '700',
+    letterSpacing: -1,
+    lineHeight: 39,
   },
   sectionTitle: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '700',
     lineHeight: 26,
   },

@@ -16,6 +16,7 @@
 // Modified by Taatoru from Tsurukame's SubjectDetailsView.swift at revision
 // 8e18ddf7f12c44e91cb0ad63bab31af7440648ea.
 
+import { ArrowLeft } from 'lucide-react-native';
 import { useAudioPlayer } from 'expo-audio';
 import { type ReactNode, useState } from 'react';
 import {
@@ -29,6 +30,8 @@ import {
 } from 'react-native';
 
 import type { SubjectResource } from '@/api/types';
+import { useScreenPadding } from '@/ui/theme/useScreenPadding';
+import { WaniKaniText } from '@/ui/components/WaniKaniText';
 import { Card } from '@/ui/components/Card';
 import { SubjectChip } from '@/ui/components/SubjectChip';
 import { minimumTouchTarget } from '@/ui/theme/spacing';
@@ -86,6 +89,7 @@ export function SubjectDetailsScreen({
   onSaveStudyMaterial,
 }: SubjectDetailsScreenProps) {
   const theme = useTheme();
+  const screenPadding = useScreenPadding();
   const [meaningNote, setMeaningNote] = useState(
     details.studyMaterial.meaningNote ?? '',
   );
@@ -122,7 +126,7 @@ export function SubjectDetailsScreen({
       contentInsetAdjustmentBehavior="automatic"
       contentContainerStyle={{
         gap: theme.spacing.lg,
-        padding: theme.spacing.xl,
+        ...screenPadding,
       }}
       data={SECTIONS}
       extraData={{
@@ -318,11 +322,14 @@ function SubjectHeader({
         style={{
           alignItems: 'center',
           alignSelf: 'flex-start',
+          flexDirection: 'row',
+          gap: theme.spacing.sm,
           justifyContent: 'center',
           minHeight: minimumTouchTarget,
           minWidth: minimumTouchTarget,
         }}
       >
+        <ArrowLeft size={18} color={theme.colors.accent} />
         <Text style={[theme.typography.label, { color: theme.colors.accent }]}>
           Back
         </Text>
@@ -332,7 +339,7 @@ function SubjectHeader({
           alignItems: 'center',
           backgroundColor: colors.background,
           borderCurve: 'continuous',
-          borderRadius: 20,
+          borderRadius: 28,
           gap: theme.spacing.md,
           padding: theme.spacing.xl,
         }}
@@ -431,17 +438,17 @@ function ExplanationCard({
   return (
     <DetailCard title={title} theme={theme}>
       {text.length === 0 ? null : (
-        <Text selectable style={bodyStyle(theme)}>
-          {plainText(text)}
-        </Text>
+        <WaniKaniText selectable style={bodyStyle(theme)}>
+          {text}
+        </WaniKaniText>
       )}
       {hint === null ? null : (
-        <Text
+        <WaniKaniText
           selectable
           style={[theme.typography.caption, { color: theme.colors.textMuted }]}
         >
-          Hint: {plainText(hint)}
-        </Text>
+          {`Hint: ${hint}`}
+        </WaniKaniText>
       )}
     </DetailCard>
   );
@@ -789,10 +796,6 @@ function normalizedSynonyms(value: string): readonly string[] {
     .map((synonym) => synonym.trim().toLowerCase())
     .filter((synonym) => synonym.length > 0);
   return [...new Set(normalized)];
-}
-
-function plainText(value: string): string {
-  return value.replace(/<[^>]+>/g, '');
 }
 
 function formatDate(value: string): string {

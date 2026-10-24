@@ -4,17 +4,14 @@ import { minimumTouchTarget } from '../theme/spacing';
 import { useTheme } from '../theme/ThemeProvider';
 
 export type SyncStatusState =
-  | 'idle'
-  | 'syncing'
-  | 'completed'
-  | 'failed'
-  | 'offline';
+  'idle' | 'syncing' | 'completed' | 'attention' | 'failed' | 'offline';
 
 const LABELS: Readonly<Record<SyncStatusState, string>> = {
   idle: 'Ready to synchronize',
   syncing: 'Synchronizing',
   completed: 'Synchronization complete',
   failed: 'Synchronization failed',
+  attention: 'Account needs attention',
   offline: 'Offline',
 };
 
@@ -24,11 +21,7 @@ interface SyncStatusProps {
   readonly onPress?: () => void;
 }
 
-export function SyncStatus({
-  state,
-  detail,
-  onPress,
-}: SyncStatusProps) {
+export function SyncStatus({ state, detail, onPress }: SyncStatusProps) {
   const theme = useTheme();
   const label = LABELS[state];
   const accessibilityLabel =
@@ -40,10 +33,7 @@ export function SyncStatus({
         style={[
           theme.typography.label,
           {
-            color:
-              state === 'failed'
-                ? theme.colors.danger
-                : theme.colors.text,
+            color: state === 'failed' ? theme.colors.danger : theme.colors.text,
           },
         ]}
       >
@@ -52,10 +42,7 @@ export function SyncStatus({
       {detail === undefined ? null : (
         <Text
           selectable
-          style={[
-            theme.typography.caption,
-            { color: theme.colors.textMuted },
-          ]}
+          style={[theme.typography.caption, { color: theme.colors.textMuted }]}
         >
           {detail}
         </Text>
@@ -66,7 +53,9 @@ export function SyncStatus({
     backgroundColor:
       state === 'failed'
         ? theme.colors.dangerSurface
-        : theme.colors.surfaceMuted,
+        : state === 'attention'
+          ? theme.colors.accentSurface
+          : theme.colors.surfaceMuted,
     borderCurve: 'continuous' as const,
     borderRadius: 12,
     gap: theme.spacing.xs,
@@ -77,11 +66,7 @@ export function SyncStatus({
   };
 
   return onPress === undefined ? (
-    <View
-      accessible
-      accessibilityLabel={accessibilityLabel}
-      style={style}
-    >
+    <View accessible accessibilityLabel={accessibilityLabel} style={style}>
       {content}
     </View>
   ) : (

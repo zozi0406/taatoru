@@ -1,28 +1,30 @@
 import { useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
-
 import type { SubjectResource } from '@/api/types';
 import type { LessonSessionSnapshot } from '@/features/sessions/SessionRepository';
-import { checkAnswer } from '@/features/reviews/answerChecker';
-import { minimumTouchTarget } from '@/ui/theme/spacing';
-import { useTheme } from '@/ui/theme/ThemeProvider';
 import {
-  reduceLesson,
-  type LessonEvent,
-  type LessonTransition,
-} from './lessonReducer';
+  DEFAULT_STUDY_SETTINGS,
+  type StudySettings,
+} from '@/features/settings/studySettings';
+import type { SubjectStudyMaterial } from '@/features/subjects/subjectDetails';
+import { useStudyAnswer } from '@/features/sessions/useStudyAnswer';
+import { StudyCompletion } from '@/features/sessions/StudyCompletion';
+import { useStudyAudio } from '@/features/sessions/useStudyAudio';
+import { reduceLesson, type LessonTransition } from './lessonReducer';
 import { LessonQuizStage } from './LessonQuizStage';
 import { LessonSubjectStage } from './LessonSubjectStage';
 
 interface LessonSessionScreenProps {
   readonly initialSnapshot: LessonSessionSnapshot;
-  readonly onCommitTransition: (
-    transition: LessonTransition,
-  ) => Promise<void>;
+  readonly onCommitTransition: (transition: LessonTransition) => Promise<void>;
   readonly onExit: () => void;
   readonly onFinish: () => Promise<void>;
   readonly onPlayAudio?: (url: string) => void;
   readonly subjects: readonly SubjectResource[];
+  readonly settings?: StudySettings;
+  readonly studyMaterials?: Readonly<Record<number, SubjectStudyMaterial>>;
+  readonly onAddSynonym?: (subjectId: number, synonym: string) => Promise<void>;
+  readonly onSettings?: () => void;
+  readonly onOpenSubject?: (id: number) => void;
 }
 
 export function LessonSessionScreen({
@@ -32,150 +34,141 @@ export function LessonSessionScreen({
   onFinish,
   onPlayAudio,
   subjects,
+  settings = DEFAULT_STUDY_SETTINGS,
+  studyMaterials = {},
+  onAddSynonym,
+  onSettings,
+  onOpenSubject,
 }: LessonSessionScreenProps) {
-  const theme = useTheme();
   const [snapshot, setSnapshot] = useState(initialSnapshot);
-  const [feedback, setFeedback] =
-    useState<'correct' | 'incorrect' | 'retry' | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const byId = new Map(subjects.map((subject) => [subject.id!, subject]));
-  const types = Object.fromEntries(
-    subjects.map((subject) => [subject.id!, subject.object]),
+  const playAudio = useStudyAudio(onPlayAudio);
+  const [presentationBusy, setPresentationBusy] = useState(false);
+  const [presentationError, setPresentationError] = useState<string | null>(
+    null,
   );
-
-  const transition = async (event: LessonEvent) => {
-    const result = reduceLesson(snapshot, event, types);
-    try {
-      await onCommitTransition(result);
-      setSnapshot(result.snapshot);
-    } catch {
-      setError('Unable to preserve lesson progress.');
+  const types = Object.fromEntries(
+    subjects.map((subject) => [subject.id, subject.object]),
+  );
+  const apply = async (type: Parameters<typeof reduceLesson>[1]['type']) => {
+    const result = reduceLesson(snapshot, { type }, types, settings);
+    await onCommitTransition(result);
+    setSnapshot(result.snapshot);
+    const current = subjects.find(
+      ({ id }) => id === snapshot.items[snapshot.queuePosition]?.subjectId,
+    );
+    if (
+      type === 'correct' &&
+      snapshot.quizState.currentPrompt === 'reading' &&
+      settings.autoplay &&
+      current !== undefined &&
+      'pronunciation_audios' in current.data
+    ) {
+      const audio = current.data.pronunciation_audios[0];
+      if (audio !== undefined) playAudio(audio.url);
     }
   };
-
-  if (snapshot.phase === 'complete') {
+  const actions = useStudyAnswer({
+    settings,
+    kind: 'lesson',
+    onAddSynonym,
+    apply,
+  });
+  const present = async (type: Parameters<typeof reduceLesson>[1]['type']) => {
+    if (presentationBusy) return;
+    setPresentationBusy(true);
+    setPresentationError(null);
+    try {
+      await apply(type);
+    } catch {
+      setPresentationError(
+        'Unable to preserve lesson progress. Please try again.',
+      );
+    } finally {
+      setPresentationBusy(false);
+    }
+  };
+  if (snapshot.phase === 'complete')
     return (
-      <View
-        style={{
-          alignItems: 'center',
-          backgroundColor: theme.colors.canvas,
-          flex: 1,
-          gap: theme.spacing.xl,
-          justifyContent: 'center',
-          padding: theme.spacing.xl,
-        }}
-      >
-        <Text
-          accessibilityRole="header"
-          style={[theme.typography.screenTitle, { color: theme.colors.text }]}
-        >
-          Lesson complete
-        </Text>
-        <Text style={[theme.typography.body, { color: theme.colors.textMuted }]}>
-          {snapshot.items.length} new subject
-          {snapshot.items.length === 1 ? '' : 's'} added to Apprentice.
-        </Text>
-        <Pressable
-          accessibilityLabel="Finish lessons"
-          accessibilityRole="button"
-          onPress={() => void onFinish()}
-          style={{
-            alignItems: 'center',
-            backgroundColor: theme.colors.accent,
-            borderRadius: 14,
-            justifyContent: 'center',
-            minHeight: minimumTouchTarget,
-            paddingHorizontal: theme.spacing.xl,
-          }}
-        >
-          <Text
-            style={[
-              theme.typography.label,
-              { color: theme.colors.accentForeground },
-            ]}
-          >
-            Finish
-          </Text>
-        </Pressable>
-      </View>
+      <StudyCompletion
+        title="Lesson complete"
+        count={snapshot.items.length}
+        detail="new subjects added to Apprentice"
+        finishLabel="Finish lessons"
+        onFinish={onFinish}
+      />
     );
-  }
-
   const item = snapshot.items[snapshot.queuePosition];
-  const subject = item === undefined ? undefined : byId.get(item.subjectId);
-  if (subject === undefined) {
+  const subject = subjects.find(({ id }) => id === item?.subjectId);
+  if (subject === undefined)
     return (
-      <View
-        style={{
-          backgroundColor: theme.colors.canvas,
-          flex: 1,
-          justifyContent: 'center',
-          padding: theme.spacing.xl,
-        }}
-      >
-        <Text accessibilityRole="alert" style={{ color: theme.colors.danger }}>
-          This lesson subject is no longer available on this device.
-        </Text>
-      </View>
+      <StudyCompletion
+        title="Lesson needs attention"
+        count={0}
+        detail="This subject is no longer available. Return home to refresh your library."
+        finishLabel="Return home"
+        onFinish={async () => onExit()}
+      />
     );
-  }
-  if (snapshot.phase === 'presentation') {
+  if (snapshot.phase === 'presentation')
     return (
       <LessonSubjectStage
+        key={subject.id}
         index={snapshot.queuePosition}
-        onExit={onExit}
-        onNext={() => void transition({ type: 'advance-presentation' })}
-        onPlayAudio={onPlayAudio}
-        subject={subject}
         total={snapshot.items.length}
+        subject={subject}
+        material={studyMaterials[subject.id]}
+        onPlayAudio={playAudio}
+        busy={presentationBusy}
+        error={presentationError}
+        onExit={onExit}
+        onSettings={onSettings}
+        onOpenSubject={onOpenSubject}
+        onNext={() => {
+          void present('advance-presentation');
+        }}
+        onPrevious={() => {
+          void present('previous-presentation');
+        }}
+        onQuiz={() => {
+          void present('start-quiz');
+        }}
       />
     );
-  }
   const prompt = snapshot.quizState.currentPrompt;
-  if (prompt === null) {
-    return null;
-  }
+  if (prompt === null) return null;
   return (
-    <View style={{ flex: 1 }}>
-      <LessonQuizStage
-        key={`${subject.id}-${prompt}`}
-        feedback={feedback}
-        index={snapshot.queuePosition}
-        onExit={onExit}
-        onSubmit={(answer) => {
-          const result = checkAnswer({
-            answer,
-            prompt,
-            subject,
-          });
-          if (result.verdict === 'retry') {
-            setFeedback('retry');
-            return;
-          }
-          setFeedback(
-            result.verdict === 'correct' ? 'correct' : 'incorrect',
-          );
-          void transition({
-            type:
-              result.verdict === 'correct' ? 'correct' : 'incorrect',
-          });
-        }}
-        prompt={prompt}
-        subject={subject}
-        total={snapshot.items.length}
-      />
-      {error === null ? null : (
-        <Text
-          accessibilityRole="alert"
-          style={{
-            backgroundColor: theme.colors.dangerSurface,
-            color: theme.colors.danger,
-            padding: theme.spacing.md,
-          }}
-        >
-          {error}
-        </Text>
-      )}
-    </View>
+    <LessonQuizStage
+      key={`${subject.id}-${prompt}-${actions.revision}`}
+      feedback={actions.feedback}
+      busy={actions.busy}
+      error={actions.error}
+      settings={settings}
+      index={snapshot.quizState.completedSubjectIds.length}
+      total={snapshot.items.length}
+      subject={subject}
+      prompt={prompt}
+      onExit={onExit}
+      onSettings={onSettings}
+      onOpenSubject={onOpenSubject}
+      onPlayAudio={playAudio}
+      material={studyMaterials[subject.id]}
+      onSubmit={(answer) =>
+        actions.submit(
+          answer,
+          prompt,
+          subject,
+          studyMaterials[subject.id]?.meaningSynonyms,
+        )
+      }
+      onContinue={actions.continue}
+      onOverride={actions.override}
+      onSkip={actions.skip}
+      onRetrySave={actions.retrySave}
+      onAddSynonym={
+        actions.addSynonym === undefined
+          ? undefined
+          : (answer) => actions.addSynonym!(subject.id, answer)
+      }
+    />
   );
 }

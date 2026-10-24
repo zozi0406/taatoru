@@ -11,8 +11,7 @@ interface SimpleBarChartProps {
 }
 
 const CHART_WIDTH = 320;
-const CHART_HEIGHT = 140;
-const BAR_GAP = 8;
+const CHART_HEIGHT = 100;
 
 export function SimpleBarChart({
   data,
@@ -21,10 +20,8 @@ export function SimpleBarChart({
 }: SimpleBarChartProps) {
   const theme = useTheme();
   const maximum = Math.max(1, ...data.map(({ value }) => value));
-  const barWidth =
-    data.length === 0
-      ? 0
-      : (CHART_WIDTH - BAR_GAP * Math.max(0, data.length - 1)) / data.length;
+  const slotWidth = CHART_WIDTH / Math.max(1, data.length);
+  const barWidth = Math.min(32, slotWidth * 0.65);
   return (
     <View
       accessible
@@ -63,7 +60,7 @@ export function SimpleBarChart({
                 height={height}
                 rx={4}
                 width={barWidth}
-                x={index * (barWidth + BAR_GAP)}
+                x={index * slotWidth + (slotWidth - barWidth) / 2}
                 y={CHART_HEIGHT - height}
               />
             );

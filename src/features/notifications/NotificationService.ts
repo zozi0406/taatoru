@@ -70,11 +70,11 @@ export class ExpoNotificationPlatform implements NotificationPlatform {
   async createChannel(): Promise<void> {
     if (Platform.OS === 'android') {
       await Promise.all([
+        // Sound strings name bundled files; omitting sound uses Android's default.
         Notifications.setNotificationChannelAsync('reviews', {
           name: 'Review availability',
           importance: Notifications.AndroidImportance.DEFAULT,
           showBadge: true,
-          sound: 'default',
         }),
         Notifications.setNotificationChannelAsync('reviews-silent', {
           name: 'Review availability (silent)',
@@ -117,7 +117,7 @@ export class ExpoNotificationPlatform implements NotificationPlatform {
         title: notification.body === null ? undefined : 'Reviews available',
         body: notification.body ?? undefined,
         badge: notification.badge ?? undefined,
-        sound: notification.sound ? 'default' : undefined,
+        sound: notification.sound,
         data: {
           cumulativeCount: notification.cumulativeCount,
           newCount: notification.newCount,

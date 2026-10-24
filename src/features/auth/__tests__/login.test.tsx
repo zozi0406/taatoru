@@ -1,9 +1,4 @@
-import {
-  act,
-  fireEvent,
-  screen,
-  waitFor,
-} from '@testing-library/react-native';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
 import * as Linking from 'expo-linking';
 import * as Network from 'expo-network';
 import { Pressable, Text } from 'react-native';
@@ -63,9 +58,7 @@ test('validates, persists, and starts the first quick sync', async () => {
     expect(
       harness.tokenStore.setPending.mock.invocationCallOrder[0],
     ).toBeLessThan(harness.synchronize.mock.invocationCallOrder[0]!);
-    expect(
-      harness.tokenStore.set.mock.invocationCallOrder[0],
-    ).toBeLessThan(
+    expect(harness.tokenStore.set.mock.invocationCallOrder[0]).toBeLessThan(
       harness.tokenStore.removePending.mock.invocationCallOrder[0]!,
     );
     expect(harness.synchronize).toHaveBeenCalledWith('quick');
@@ -88,9 +81,9 @@ test('does not authenticate or persist a token when the required initial sync fa
     },
   });
   try {
-    await expect(
-      harness.manager.login('new-token'),
-    ).rejects.toThrow('initial WaniKani sync');
+    await expect(harness.manager.login('new-token')).rejects.toThrow(
+      'initial WaniKani sync',
+    );
     expect(harness.tokenStore.setPending).toHaveBeenCalledWith('new-token');
     expect(harness.tokenStore.set).not.toHaveBeenCalled();
     expect(harness.tokenStore.removePending).not.toHaveBeenCalled();
@@ -109,9 +102,9 @@ test('does not authenticate when initial synchronization completes without cachi
     updatedResources: 0,
   });
   try {
-    await expect(
-      harness.manager.login('new-token'),
-    ).rejects.toThrow('initial WaniKani sync');
+    await expect(harness.manager.login('new-token')).rejects.toThrow(
+      'initial WaniKani sync',
+    );
     expect(harness.tokenStore.set).not.toHaveBeenCalled();
   } finally {
     await harness.db.close();
@@ -135,17 +128,17 @@ test('does not treat a partial user row from a failed first sync as an offline c
     };
   });
   try {
-    await expect(
-      harness.manager.login('new-token'),
-    ).rejects.toThrow('initial WaniKani sync');
+    await expect(harness.manager.login('new-token')).rejects.toThrow(
+      'initial WaniKani sync',
+    );
     harness.synchronize.mockResolvedValueOnce({
       status: 'skipped',
       reason: 'offline',
     });
 
-    await expect(
-      harness.manager.login('new-token'),
-    ).rejects.toThrow('initial WaniKani sync');
+    await expect(harness.manager.login('new-token')).rejects.toThrow(
+      'initial WaniKani sync',
+    );
     expect(harness.tokenStore.set).not.toHaveBeenCalled();
   } finally {
     await harness.db.close();
@@ -165,9 +158,9 @@ test('resumes from the cached user while startup synchronization is offline', as
       reason: 'offline',
     });
 
-    await expect(
-      harness.manager.resume('stored-token'),
-    ).resolves.toEqual(userFixture);
+    await expect(harness.manager.resume('stored-token')).resolves.toEqual(
+      userFixture,
+    );
     expect(harness.api.getUser).not.toHaveBeenCalled();
     expect(harness.apiFactory).toHaveBeenCalledWith('stored-token');
   } finally {
@@ -217,9 +210,9 @@ test('a different account requires explicit replacement before pending data is c
     await new ResourceRepository(harness.db).replaceUser(userFixture);
     await seedPending(harness.db);
 
-    await expect(
-      harness.manager.login('other-token'),
-    ).rejects.toBeInstanceOf(AccountChangeRequiredError);
+    await expect(harness.manager.login('other-token')).rejects.toBeInstanceOf(
+      AccountChangeRequiredError,
+    );
     expect(harness.tokenStore.set).not.toHaveBeenCalled();
     await expect(pendingCount(harness.db)).resolves.toBe(1);
 
@@ -244,9 +237,9 @@ test('exposes interrupted setup without making a request on launch', async () =>
       </AuthProvider>,
     );
 
-    expect(
-      (await screen.findByTestId('auth-state')).props.children,
-    ).toContain('"status":"interrupted"');
+    expect((await screen.findByTestId('auth-state')).props.children).toContain(
+      '"status":"interrupted"',
+    );
     expect(harness.apiFactory).not.toHaveBeenCalled();
     expect(harness.synchronize).not.toHaveBeenCalled();
     expect(addNetworkListener).not.toHaveBeenCalled();
@@ -279,13 +272,13 @@ test('restarts interrupted setup after clearing the incomplete cache', async () 
     return { status: 'completed', updatedResources: 1 };
   });
   try {
-    await expect(
-      harness.manager.continueInterruptedSetup(),
-    ).resolves.toEqual(userFixture);
+    await expect(harness.manager.continueInterruptedSetup()).resolves.toEqual(
+      userFixture,
+    );
 
-    expect(
-      harness.clearAccount.mock.invocationCallOrder[0],
-    ).toBeLessThan(harness.api.getUser.mock.invocationCallOrder[0]!);
+    expect(harness.clearAccount.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.api.getUser.mock.invocationCallOrder[0]!,
+    );
     await expect(
       harness.db.first('SELECT value FROM settings WHERE key = ?', ['theme']),
     ).resolves.toEqual({ value: 'dark' });
@@ -304,9 +297,7 @@ test('using another API key clears partial data and the pending credential', asy
     await harness.manager.useAnotherApiKey();
 
     expect(harness.apiFactory).not.toHaveBeenCalled();
-    expect(
-      harness.clearAccount.mock.invocationCallOrder[0],
-    ).toBeLessThan(
+    expect(harness.clearAccount.mock.invocationCallOrder[0]).toBeLessThan(
       harness.tokenStore.removePending.mock.invocationCallOrder[0]!,
     );
     await expect(
@@ -389,29 +380,27 @@ test.each([
     'attention',
     '2026-08-04T12:01:00.000Z',
   ],
-])('classifies %s initial-sync failure safely', async (
-  _label,
-  result,
-  expectedStatus,
-  retryAt,
-) => {
-  const harness = await authHarness();
-  const report = jest.fn();
-  harness.synchronize.mockResolvedValueOnce(result);
-  try {
-    const failure = await harness.manager
-      .login('new-token', report)
-      .catch((error: unknown) => error);
+])(
+  'classifies %s initial-sync failure safely',
+  async (_label, result, expectedStatus, retryAt) => {
+    const harness = await authHarness();
+    const report = jest.fn();
+    harness.synchronize.mockResolvedValueOnce(result);
+    try {
+      const failure = await harness.manager
+        .login('new-token', report)
+        .catch((error: unknown) => error);
 
-    expect(failure).toBeInstanceOf(InitialSyncError);
-    expect(failure).toMatchObject({ retryAt });
-    expect(report).toHaveBeenLastCalledWith(
-      expect.objectContaining({ status: expectedStatus, retryAt }),
-    );
-  } finally {
-    await harness.db.close();
-  }
-});
+      expect(failure).toBeInstanceOf(InitialSyncError);
+      expect(failure).toMatchObject({ retryAt });
+      expect(report).toHaveBeenLastCalledWith(
+        expect.objectContaining({ status: expectedStatus, retryAt }),
+      );
+    } finally {
+      await harness.db.close();
+    }
+  },
+);
 
 test('retries initial sync when setup starts offline and connectivity returns', async () => {
   const harness = await authHarness();
@@ -519,9 +508,7 @@ test('keeps connection-issue guidance when manual retry cannot revalidate offlin
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Test retry' }));
     });
-    await waitFor(() =>
-      expect(harness.api.getUser).toHaveBeenCalledTimes(2),
-    );
+    await waitFor(() => expect(harness.api.getUser).toHaveBeenCalledTimes(2));
 
     expect(screen.getByTestId('auth-state').props.children).toContain(
       'connection-issues',
@@ -633,6 +620,26 @@ test('submits an explicitly confirmed account replacement separately', async () 
   expect(onLogin).not.toHaveBeenCalled();
 });
 
+test('explains hibernation during sign-in without asking for a password', async () => {
+  await renderApp(
+    <ThemeProvider scheme="light">
+      <LoginScreen
+        busy={false}
+        error="The user is hibernating"
+        requiresAccountChange={false}
+        onLogin={jest.fn()}
+        onChangeAccount={jest.fn()}
+      />
+    </ThemeProvider>,
+  );
+  expect(
+    screen.getByText('WaniKani account needs attention'),
+  ).toBeOnTheScreen();
+  expect(screen.getByRole('link', { name: 'Open WaniKani' })).toBeOnTheScreen();
+  expect(screen.queryByText('The user is hibernating')).not.toBeOnTheScreen();
+  expect(screen.getByLabelText('WaniKani API token')).toBeOnTheScreen();
+});
+
 async function renderLoginScreen() {
   return renderApp(
     <ThemeProvider scheme="light">
@@ -708,10 +715,12 @@ async function seedPending(db: NodeTestDatabase): Promise<void> {
 
 async function pendingCount(db: NodeTestDatabase): Promise<number> {
   return (
-    await db.first<{ count: number }>(
-      'SELECT COUNT(*) AS count FROM pending_progress',
-    )
-  )?.count ?? 0;
+    (
+      await db.first<{ count: number }>(
+        'SELECT COUNT(*) AS count FROM pending_progress',
+      )
+    )?.count ?? 0
+  );
 }
 
 function AuthStateProbe() {

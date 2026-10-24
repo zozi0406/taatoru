@@ -18,37 +18,27 @@
 
 import { romajiToKana } from '@/features/search/kana';
 import { damerauLevenshtein } from './levenshtein';
-import type {
-  AnswerResult,
-  CheckAnswerInput,
-  ReviewPrompt,
-} from './types';
+import type { AnswerResult, CheckAnswerInput, ReviewPrompt } from './types';
 
-const JAPANESE = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff66-\uff9f]/u;
+const JAPANESE =
+  /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff66-\uff9f]/u;
 const KANA_ONLY = /^[\u3040-\u30ff\u31f0-\u31ffー]+$/u;
 const HIRAGANA_SUFFIX = /[\u3040-\u309fー]+$/u;
 
 export function checkAnswer(input: CheckAnswerInput): AnswerResult {
-  return input.prompt === 'meaning'
-    ? checkMeaning(input)
-    : checkReading(input);
+  return input.prompt === 'meaning' ? checkMeaning(input) : checkReading(input);
 }
 
-export function normalizeAnswer(
-  value: string,
-  prompt: ReviewPrompt,
-): string {
+export function normalizeAnswer(value: string, prompt: ReviewPrompt): string {
   const normalized = value
     .normalize('NFKC')
     .trim()
     .toLocaleLowerCase()
-    .replaceAll('-', ' ')
+    .replaceAll('-', prompt === 'reading' ? '-' : ' ')
     .replaceAll('.', '')
     .replaceAll("'", '')
     .replaceAll('/', '');
-  return prompt === 'reading'
-    ? normalized.replaceAll(' ', '')
-    : normalized;
+  return prompt === 'reading' ? normalized.replaceAll(' ', '') : normalized;
 }
 
 export function katakanaToHiragana(value: string): string {
@@ -72,9 +62,7 @@ function checkMeaning(input: CheckAnswerInput): AnswerResult {
     .filter(({ type }) => type === 'blacklist')
     .map(({ meaning }) => meaning);
   if (
-    forbidden.some(
-      (meaning) => normalizeAnswer(meaning, 'meaning') === answer,
-    )
+    forbidden.some((meaning) => normalizeAnswer(meaning, 'meaning') === answer)
   ) {
     return { verdict: 'incorrect', expected: accepted };
   }
@@ -87,8 +75,7 @@ function checkMeaning(input: CheckAnswerInput): AnswerResult {
   const close = accepted.find((meaning) => {
     const normalized = normalizeAnswer(meaning, 'meaning');
     return (
-      damerauLevenshtein(normalized, answer) <=
-      distanceTolerance(normalized)
+      damerauLevenshtein(normalized, answer) <= distanceTolerance(normalized)
     );
   });
   if (close !== undefined) {
@@ -132,9 +119,7 @@ function checkReading(input: CheckAnswerInput): AnswerResult {
   if ('readings' in input.subject.data && input.subject.object === 'kanji') {
     const alternate = input.subject.data.readings
       .filter(({ accepted_answer }) => !accepted_answer)
-      .find(
-        ({ reading }) => katakanaToHiragana(reading) === converted,
-      );
+      .find(({ reading }) => katakanaToHiragana(reading) === converted);
     if (alternate !== undefined) {
       return { verdict: 'retry', reason: 'other-kanji-reading' };
     }
@@ -178,9 +163,7 @@ function readingText(value: string): string | null {
     return katakanaToHiragana(normalized);
   }
   const conversion = romajiToKana(normalized);
-  return conversion.complete
-    ? katakanaToHiragana(conversion.text)
-    : null;
+  return conversion.complete ? katakanaToHiragana(conversion.text) : null;
 }
 
 function distanceTolerance(answer: string): number {

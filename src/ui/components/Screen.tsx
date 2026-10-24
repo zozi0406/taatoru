@@ -1,12 +1,9 @@
 import type { PropsWithChildren, ReactNode } from 'react';
-import {
-  ScrollView,
-  Text,
-  View,
-  type ScrollViewProps,
-} from 'react-native';
+import { ScrollView, type ScrollViewProps } from 'react-native';
 
 import { useTheme } from '../theme/ThemeProvider';
+import { useScreenPadding } from '../theme/useScreenPadding';
+import { PageHeading } from './PageHeading';
 
 interface ScreenProps extends PropsWithChildren<ScrollViewProps> {
   readonly title: string;
@@ -21,6 +18,7 @@ export function Screen({
   ...props
 }: ScreenProps) {
   const theme = useTheme();
+  const screenPadding = useScreenPadding();
   return (
     <ScrollView
       {...props}
@@ -30,24 +28,16 @@ export function Screen({
         {
           flexGrow: 1,
           gap: theme.spacing.xl,
-          padding: theme.spacing.xl,
+          ...screenPadding,
         },
         contentContainerStyle,
       ]}
     >
-      <View style={{ gap: theme.spacing.sm }}>
-        <Text
-          accessibilityRole="header"
-          selectable
-          style={[
-            theme.typography.screenTitle,
-            { color: theme.colors.text },
-          ]}
-        >
-          {title}
-        </Text>
-        {intro}
-      </View>
+      <PageHeading
+        title={title}
+        eyebrow="TAATORU / YOUR STUDY SPACE"
+        intro={intro}
+      />
       {children}
     </ScrollView>
   );
