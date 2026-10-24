@@ -12,7 +12,7 @@ import type {
 } from './types';
 
 export interface RateLimitSnapshot {
-  readonly limit: 60;
+  readonly limit: number;
   readonly requestsInServerMinute: number;
   readonly requestsRemaining: number;
   readonly resetAfterMs: number;

@@ -6,7 +6,17 @@ import { useTheme } from '@/ui/theme/ThemeProvider';
 export default function TabLayout() {
   const theme = useTheme();
   return (
-    <NativeTabs tintColor={theme.colors.accent}>
+    <NativeTabs
+      tintColor={theme.colors.accent}
+      backgroundColor={theme.colors.surface}
+      indicatorColor={theme.colors.accentSurface}
+      iconColor={{
+        default: theme.colors.textMuted,
+        selected: theme.colors.accent,
+      }}
+      labelVisibilityMode="labeled"
+      disableTransparentOnScrollEdge
+    >
       {TAB_ITEMS.map((tab) => (
         <NativeTabs.Trigger key={tab.route} name={tab.route}>
           <NativeTabs.Trigger.Icon sf={tab.sf} md={tab.md} />

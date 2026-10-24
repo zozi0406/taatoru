@@ -10,6 +10,12 @@ import {
   View,
 } from 'react-native';
 
+import {
+  AccountHibernationNotice,
+  isHibernationMessage,
+} from './AccountHibernationNotice';
+import { BrandWordmark, PageHeading } from '@/ui/components/PageHeading';
+import { useScreenPadding } from '@/ui/theme/useScreenPadding';
 import { useTheme } from '@/ui/theme/ThemeProvider';
 
 export const WANIKANI_TOKEN_URL =
@@ -33,6 +39,8 @@ export function LoginScreen({
   const [token, setToken] = useState('');
   const [linkError, setLinkError] = useState<string | null>(null);
   const theme = useTheme();
+  const screenPadding = useScreenPadding();
+  const hibernating = isHibernationMessage(error);
   const submit = requiresAccountChange ? onChangeAccount : onLogin;
   const openTokenPage = async () => {
     setLinkError(null);
@@ -48,174 +56,166 @@ export function LoginScreen({
   return (
     <ScrollView
       automaticallyAdjustKeyboardInsets
-      contentContainerStyle={styles.screenContent}
+      contentContainerStyle={[styles.screenContent, screenPadding]}
       contentInsetAdjustmentBehavior="automatic"
       keyboardShouldPersistTaps="handled"
       testID="login-screen"
-      style={[
-        styles.screen,
-        { backgroundColor: theme.colors.canvas },
-      ]}
+      style={[styles.screen, { backgroundColor: theme.colors.canvas }]}
     >
-      <View
-        style={[
-          styles.card,
-          {
-            backgroundColor: theme.colors.surface,
-            borderColor: theme.colors.border,
-          },
-        ]}
-      >
-        <Text
-          accessibilityRole="header"
-          style={[
-            styles.title,
-            { color: theme.colors.text },
-          ]}
-        >
-          Connect WaniKani
-        </Text>
-        <Text
-          selectable
-          style={[
-            styles.body,
-            { color: theme.colors.textMuted },
-          ]}
-        >
-          Taatoru connects through a personal access token, so it never sees
-          your WaniKani password.
-        </Text>
-        <View style={styles.linkSection}>
-          <Pressable
-            accessibilityLabel="Open WaniKani API Tokens"
-            accessibilityRole="link"
-            onPress={() => void openTokenPage()}
-            style={({ pressed }) => [
-              styles.tokenLink,
-              { backgroundColor: theme.colors.accent },
-              pressed && styles.buttonPressed,
-            ]}
-          >
+      <View style={{ width: '100%', maxWidth: 560, gap: 28 }}>
+        <BrandWordmark />
+        <PageHeading
+          title="A little Japanese.
+Every day."
+          eyebrow="YOUR NEXT CHAPTER STARTS HERE"
+          intro={
             <Text
-              style={[
-                styles.buttonText,
-                { color: theme.colors.accentForeground },
+              style={[theme.typography.body, { color: theme.colors.textMuted }]}
+            >
+              Your WaniKani, in a space made for focus.
+            </Text>
+          }
+        />
+        <View
+          style={[
+            styles.card,
+            {
+              backgroundColor: theme.colors.surface,
+              borderColor: theme.colors.border,
+            },
+          ]}
+        >
+          <Text
+            accessibilityRole="header"
+            style={[styles.title, { color: theme.colors.text }]}
+          >
+            Connect WaniKani
+          </Text>
+          <Text
+            selectable
+            style={[styles.body, { color: theme.colors.textMuted }]}
+          >
+            Taatoru connects through a personal access token, so it never sees
+            your WaniKani password.
+          </Text>
+          <View style={styles.linkSection}>
+            <Pressable
+              accessibilityLabel="Open WaniKani API Tokens"
+              accessibilityRole="link"
+              onPress={() => void openTokenPage()}
+              style={({ pressed }) => [
+                styles.tokenLink,
+                { backgroundColor: theme.colors.accentSurface },
+                pressed && styles.buttonPressed,
               ]}
             >
-              Open WaniKani API Tokens
+              <Text style={[styles.buttonText, { color: theme.colors.accent }]}>
+                Open WaniKani API Tokens
+              </Text>
+            </Pressable>
+            {linkError === null ? null : (
+              <Text
+                accessibilityRole="alert"
+                selectable
+                style={[styles.linkError, { color: theme.colors.danger }]}
+              >
+                {linkError}
+              </Text>
+            )}
+          </View>
+          <View style={styles.instructions}>
+            <Text
+              accessibilityRole="header"
+              style={[styles.sectionTitle, { color: theme.colors.text }]}
+            >
+              How to connect
             </Text>
-          </Pressable>
-          {linkError === null ? null : (
+            <Text
+              selectable
+              style={[styles.step, { color: theme.colors.text }]}
+            >
+              1. Sign in to WaniKani in the page that opens.
+            </Text>
+            <Text
+              selectable
+              style={[styles.step, { color: theme.colors.text }]}
+            >
+              2. Create a token named Taatoru. Allow starting assignments,
+              creating reviews, and creating or updating study materials.
+            </Text>
+            <Text
+              selectable
+              style={[styles.step, { color: theme.colors.text }]}
+            >
+              3. Copy the token, return here, and paste it below.
+            </Text>
+          </View>
+          <View
+            style={[styles.divider, { backgroundColor: theme.colors.border }]}
+          />
+          <Text style={[styles.inputLabel, { color: theme.colors.text }]}>
+            Personal access token
+          </Text>
+          <TextInput
+            accessibilityLabel="WaniKani API token"
+            autoCapitalize="none"
+            autoCorrect={false}
+            editable={!busy}
+            onChangeText={setToken}
+            placeholder="Paste token here"
+            placeholderTextColor={theme.colors.textMuted}
+            secureTextEntry
+            style={[
+              styles.input,
+              {
+                borderColor: theme.colors.border,
+                color: theme.colors.text,
+              },
+            ]}
+            value={token}
+          />
+          <Text
+            selectable
+            style={[styles.securityNote, { color: theme.colors.textMuted }]}
+          >
+            Your token is stored securely on this device. You can revoke it from
+            WaniKani at any time.
+          </Text>
+          {hibernating ? (
+            <AccountHibernationNotice />
+          ) : error === null ? null : (
             <Text
               accessibilityRole="alert"
               selectable
-              style={[
-                styles.linkError,
-                { color: theme.colors.danger },
-              ]}
+              style={[styles.error, { color: theme.colors.danger }]}
             >
-              {linkError}
+              {error}
             </Text>
           )}
-        </View>
-        <View style={styles.instructions}>
-          <Text
-            accessibilityRole="header"
-            style={[
-              styles.sectionTitle,
-              { color: theme.colors.text },
+          <Pressable
+            accessibilityRole="button"
+            disabled={busy}
+            onPress={() => void submit(token)}
+            style={({ pressed }) => [
+              styles.button,
+              { backgroundColor: theme.colors.accent },
+              (pressed || busy) && styles.buttonPressed,
             ]}
           >
-            How to connect
-          </Text>
-          <Text selectable style={[styles.step, { color: theme.colors.text }]}>
-            1. Sign in to WaniKani in the page that opens.
-          </Text>
-          <Text selectable style={[styles.step, { color: theme.colors.text }]}>
-            2. Create a token named Taatoru. Allow starting assignments,
-            creating reviews, and creating or updating study materials.
-          </Text>
-          <Text selectable style={[styles.step, { color: theme.colors.text }]}>
-            3. Copy the token, return here, and paste it below.
-          </Text>
+            {busy ? (
+              <ActivityIndicator color={theme.colors.accentForeground} />
+            ) : (
+              <Text
+                style={[
+                  styles.buttonText,
+                  { color: theme.colors.accentForeground },
+                ]}
+              >
+                {requiresAccountChange ? 'Replace account' : 'Connect account'}
+              </Text>
+            )}
+          </Pressable>
         </View>
-        <View
-          style={[
-            styles.divider,
-            { backgroundColor: theme.colors.border },
-          ]}
-        />
-        <Text
-          style={[
-            styles.inputLabel,
-            { color: theme.colors.text },
-          ]}
-        >
-          Personal access token
-        </Text>
-        <TextInput
-          accessibilityLabel="WaniKani API token"
-          autoCapitalize="none"
-          autoCorrect={false}
-          editable={!busy}
-          onChangeText={setToken}
-          placeholder="Paste token here"
-          placeholderTextColor={theme.colors.textMuted}
-          secureTextEntry
-          style={[
-            styles.input,
-            {
-              borderColor: theme.colors.border,
-              color: theme.colors.text,
-            },
-          ]}
-          value={token}
-        />
-        <Text
-          selectable
-          style={[
-            styles.securityNote,
-            { color: theme.colors.textMuted },
-          ]}
-        >
-          Your token is stored securely on this device. You can revoke it from
-          WaniKani at any time.
-        </Text>
-        {error === null ? null : (
-          <Text
-            accessibilityRole="alert"
-            selectable
-            style={[
-              styles.error,
-              { color: theme.colors.danger },
-            ]}
-          >
-            {error}
-          </Text>
-        )}
-        <Pressable
-          accessibilityRole="button"
-          disabled={busy}
-          onPress={() => void submit(token)}
-          style={({ pressed }) => [
-            styles.button,
-            { backgroundColor: theme.colors.accent },
-            (pressed || busy) && styles.buttonPressed,
-          ]}
-        >
-          {busy ? (
-            <ActivityIndicator color={theme.colors.accentForeground} />
-          ) : (
-            <Text
-              style={[
-                styles.buttonText,
-                { color: theme.colors.accentForeground },
-              ]}
-            >
-              {requiresAccountChange ? 'Replace account' : 'Connect account'}
-            </Text>
-          )}
-        </Pressable>
       </View>
     </ScrollView>
   );
@@ -243,7 +243,7 @@ const styles = StyleSheet.create({
   card: {
     borderCurve: 'continuous',
     borderWidth: 1,
-    borderRadius: 18,
+    borderRadius: 24,
     padding: 24,
     width: '100%',
   },
@@ -285,7 +285,7 @@ const styles = StyleSheet.create({
   },
   screenContent: {
     flexGrow: 1,
-    justifyContent: 'center',
+    alignItems: 'center',
     padding: 24,
   },
   sectionTitle: {

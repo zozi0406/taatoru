@@ -16,7 +16,9 @@
 // Modified by Taatoru from Tsurukame's LessonPickerViewController.swift at
 // revision 8e18ddf7f12c44e91cb0ad63bab31af7440648ea.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { Check, ArrowRight } from 'lucide-react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   ActivityIndicator,
   FlatList,
@@ -28,6 +30,10 @@ import {
 import type { SubjectResource } from '@/api/types';
 import type { Database } from '@/db/Database';
 import { NOT_EXCLUDED } from '@/db/repositories/AssignmentRepository';
+import { SUBJECT_WITHIN_GRANTED_LEVEL } from '@/db/subscription';
+import { PageHeading } from '@/ui/components/PageHeading';
+import { SubjectGlyph } from '@/ui/components/SubjectGlyph';
+import { useScreenPadding } from '@/ui/theme/useScreenPadding';
 import { Card } from '@/ui/components/Card';
 import { SubjectChip } from '@/ui/components/SubjectChip';
 import { minimumTouchTarget } from '@/ui/theme/spacing';
@@ -42,14 +48,14 @@ export interface LessonPickerItem extends LessonCandidate {
 
 interface LessonPickerScreenProps {
   readonly loadCandidates: () => Promise<readonly LessonPickerItem[]>;
-  readonly onBegin: (
-    items: readonly LessonPickerItem[],
-  ) => Promise<void>;
-  readonly onCancel: () => void;
+  readonly onBegin: (items: readonly LessonPickerItem[]) => Promise<void>;
+  readonly onCancel: () => void | Promise<void>;
   readonly onSelectionChange: (
     items: readonly LessonPickerItem[],
   ) => Promise<void>;
   readonly restoredSelectedIds?: readonly number[];
+  readonly maxSelection?: number;
+  readonly selectionHint?: string;
 }
 
 type PickerRow =
@@ -63,6 +69,8 @@ type PickerRow =
       readonly kind: 'type';
       readonly subjectType: LessonSubjectType;
       readonly count: number;
+      readonly level: number;
+      readonly subjectIds: readonly number[];
     }
   | {
       readonly key: string;
@@ -76,14 +84,22 @@ export function LessonPickerScreen({
   onCancel,
   onSelectionChange,
   restoredSelectedIds = [],
+  maxSelection = Number.POSITIVE_INFINITY,
+  selectionHint,
 }: LessonPickerScreenProps) {
   const theme = useTheme();
+  const screenPadding = useScreenPadding();
+  const insets = useSafeAreaInsets();
   const [selection, setSelection] = useState<LessonSelection | null>(null);
   const [items, setItems] = useState<readonly LessonPickerItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [busy, setBusy] = useState(false);
   const [revision, setRevision] = useState(0);
   const [message, setMessage] = useState<string | null>(null);
+  const pendingSave = useRef<Promise<void>>(Promise.resolve());
+  const actionInProgress = useRef(false);
   const restoredKey = restoredSelectedIds.join(',');
 
   useEffect(() => {
@@ -92,15 +108,17 @@ export function LessonPickerScreen({
       .then((loaded) => {
         if (!active) return;
         setItems(loaded);
-        setSelection(new LessonSelection(
-          loaded,
-          restoredKey.length === 0
-            ? []
-            : restoredKey.split(',').map(Number),
-        ));
+        setSelection(
+          new LessonSelection(
+            loaded,
+            restoredKey.length === 0 ? [] : restoredKey.split(',').map(Number),
+            maxSelection,
+          ),
+        );
       })
       .catch(() => {
         if (active) {
+          setLoadFailed(true);
           setMessage('Unable to load lessons from this device.');
         }
       })
@@ -112,41 +130,79 @@ export function LessonPickerScreen({
     return () => {
       active = false;
     };
-  }, [loadCandidates, restoredKey]);
+  }, [loadCandidates, restoredKey, maxSelection, loadAttempt]);
 
-  const selectedItems = (): readonly LessonPickerItem[] => {
-    const selectedIds = new Set(selection?.selectedIds ?? []);
+  const selectedItems = (current = selection): readonly LessonPickerItem[] => {
+    const selectedIds = new Set(current?.selectedIds ?? []);
     return items.filter(({ subjectId }) => selectedIds.has(subjectId));
   };
 
-  const toggle = async (subjectId: number) => {
-    selection?.toggle(subjectId);
+  const saveSelection = (selected: readonly LessonPickerItem[]) => {
+    // A slow draft save must finish before a later draft, Begin, or Cancel.
+    const next = pendingSave.current
+      .catch(() => undefined)
+      .then(() => onSelectionChange(selected));
+    pendingSave.current = next;
+    return next;
+  };
+
+  const updateSelection = async (
+    update: (current: LessonSelection) => void,
+  ) => {
+    if (actionInProgress.current || selection === null) return;
+    const nextSelection = new LessonSelection(
+      items,
+      selection.selectedIds,
+      maxSelection,
+    );
+    update(nextSelection);
+    setSelection(nextSelection);
     setRevision((value) => value + 1);
     setMessage(null);
     try {
-      await onSelectionChange(selectedItems());
+      await saveSelection(selectedItems(nextSelection));
     } catch {
       setMessage('Unable to preserve this selection on your device.');
     }
   };
 
+  const cancel = async () => {
+    if (actionInProgress.current) return;
+    actionInProgress.current = true;
+    setBusy(true);
+    try {
+      await pendingSave.current.catch(() => undefined);
+      await onCancel();
+    } catch {
+      setMessage('Unable to cancel this selection. Please try again.');
+    } finally {
+      actionInProgress.current = false;
+      setBusy(false);
+    }
+  };
+
   const begin = async () => {
-    const current = selection;
-    if (current === null || !current.canBegin) {
+    const current =
+      selection === null
+        ? null
+        : new LessonSelection(items, selection.selectedIds, maxSelection);
+    if (actionInProgress.current || current === null || !current.canBegin) {
       return;
     }
+    actionInProgress.current = true;
     setBusy(true);
     setMessage(null);
     try {
       const latest = await loadCandidates();
       current.revalidate(latest);
+      setSelection(current);
       setItems(latest);
       setRevision((value) => value + 1);
       const selectedIds = new Set(current.selectedIds);
       const selected = latest.filter(({ subjectId }) =>
         selectedIds.has(subjectId),
       );
-      await onSelectionChange(selected);
+      await saveSelection(selected);
       if (selected.length === 0) {
         setMessage(
           'Your selection changed because some lessons are no longer available.',
@@ -157,6 +213,7 @@ export function LessonPickerScreen({
     } catch {
       setMessage('Unable to begin these lessons.');
     } finally {
+      actionInProgress.current = false;
       setBusy(false);
     }
   };
@@ -164,179 +221,281 @@ export function LessonPickerScreen({
   const rows = pickerRows(items);
   const selectedCount = selection?.selectedCount ?? 0;
   return (
-    <FlatList
-      testID="lesson-picker-list"
-      contentInsetAdjustmentBehavior="automatic"
-      contentContainerStyle={{
-        flexGrow: 1,
-        gap: theme.spacing.sm,
-        padding: theme.spacing.xl,
-      }}
-      data={rows}
-      extraData={{ busy, message, revision }}
-      keyExtractor={({ key }) => key}
-      style={{ backgroundColor: theme.colors.canvas }}
-      ListHeaderComponent={
-        <View style={{ gap: theme.spacing.md }}>
-          <Text
-            accessibilityRole="header"
-            selectable
-            style={[
-              theme.typography.screenTitle,
-              { color: theme.colors.text },
-            ]}
-          >
-            Lesson picker
-          </Text>
-          <Text
-            selectable
-            style={[
-              theme.typography.body,
-              { color: theme.colors.textMuted },
-            ]}
-          >
-            Choose exactly which available subjects to learn.
-          </Text>
-          <Text
-            accessibilityLiveRegion="polite"
-            selectable
-            style={[
-              theme.typography.label,
-              { color: theme.colors.text },
-            ]}
-          >
-            {selectedCount} selected
-          </Text>
-          <View style={{ flexDirection: 'row', gap: theme.spacing.md }}>
-            <ActionButton
-              disabled={busy || selectedCount === 0}
-              label={busy ? 'Preparing…' : 'Begin'}
-              accessibilityLabel="Begin selected lessons"
-              onPress={() => void begin()}
-              primary
-            />
-            <ActionButton
-              disabled={busy}
-              label="Cancel"
-              accessibilityLabel="Cancel lesson selection"
-              onPress={onCancel}
-            />
-          </View>
-          {loading ? (
-            <ActivityIndicator accessibilityLabel="Loading available lessons" />
-          ) : null}
-          {message === null ? null : (
-            <Text
-              accessibilityRole="alert"
-              selectable
-              style={[theme.typography.body, { color: theme.colors.danger }]}
-            >
-              {message}
-            </Text>
-          )}
-        </View>
-      }
-      ListEmptyComponent={
-        loading ? null : (
-          <Text
-            selectable
-            style={[
-              theme.typography.body,
-              { color: theme.colors.textMuted, paddingTop: theme.spacing.lg },
-            ]}
-          >
-            No lessons are currently available.
-          </Text>
-        )
-      }
-      renderItem={({ item: row }) => {
-        if (row.kind === 'level') {
-          return (
-            <Text
-              accessibilityRole="header"
-              selectable
-              style={[
-                theme.typography.sectionTitle,
-                {
-                  color: theme.colors.text,
-                  paddingTop: theme.spacing.lg,
-                },
-              ]}
-            >
-              Level {row.level}
-            </Text>
-          );
-        }
-        if (row.kind === 'type') {
-          return (
-            <Text
-              selectable
-              style={[
-                theme.typography.caption,
-                { color: theme.colors.textMuted },
-              ]}
-            >
-              {subjectTypeLabel(row.subjectType)} ({row.count})
-            </Text>
-          );
-        }
-        const checked =
-          selection?.isSelected(row.item.subjectId) ?? false;
-        return (
-          <Pressable
-            accessibilityLabel={row.item.primaryMeaning}
-            accessibilityRole="checkbox"
-            accessibilityState={{ checked }}
-            onPress={() => void toggle(row.item.subjectId)}
-            style={{ minHeight: minimumTouchTarget }}
-          >
-            <Card
-              style={{
-                alignItems: 'center',
-                borderColor: checked
-                  ? theme.colors.accent
-                  : theme.colors.border,
-                borderWidth: checked ? 2 : 1,
-                flexDirection: 'row',
-                gap: theme.spacing.lg,
-              }}
-            >
-              <Text
-                selectable
-                style={[
-                  theme.typography.screenTitle,
-                  { color: theme.colors.text, minWidth: 52 },
-                ]}
-              >
-                {row.item.characters ?? '◻︎'}
-              </Text>
-              <View style={{ flex: 1, gap: theme.spacing.xs }}>
+    <View style={{ flex: 1, backgroundColor: theme.colors.canvas }}>
+      <FlatList
+        testID="lesson-picker-list"
+        contentInsetAdjustmentBehavior="automatic"
+        contentContainerStyle={{
+          flexGrow: 1,
+          gap: theme.spacing.sm,
+          ...screenPadding,
+        }}
+        data={rows}
+        extraData={{ busy, message, revision }}
+        keyExtractor={({ key }) => key}
+        style={{ backgroundColor: theme.colors.canvas }}
+        ListHeaderComponent={
+          <View style={{ gap: theme.spacing.md }}>
+            <PageHeading
+              title="Choose lessons"
+              eyebrow="LEARN YOUR WAY"
+              intro={
                 <Text
-                  selectable
                   style={[
-                    theme.typography.sectionTitle,
-                    { color: theme.colors.text },
+                    theme.typography.body,
+                    { color: theme.colors.textMuted },
                   ]}
                 >
-                  {row.item.primaryMeaning}
+                  Select subjects to study in your next lesson batch.
                 </Text>
-                <SubjectChip type={row.item.subjectType} />
-              </View>
+              }
+            />
+            {loading ? (
+              <ActivityIndicator accessibilityLabel="Loading available lessons" />
+            ) : null}
+            {selectionHint === undefined ? null : (
               <Text
-                accessibilityElementsHidden
-                importantForAccessibility="no-hide-descendants"
                 style={[
-                  theme.typography.sectionTitle,
-                  { color: theme.colors.accent },
+                  theme.typography.caption,
+                  { color: theme.colors.textMuted },
                 ]}
               >
-                {checked ? '✓' : ''}
+                {selectionHint}
               </Text>
-            </Card>
-          </Pressable>
-        );
-      }}
-    />
+            )}
+            {loadFailed ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Retry loading lessons"
+                onPress={() => {
+                  setLoading(true);
+                  setLoadFailed(false);
+                  setMessage(null);
+                  setLoadAttempt((attempt) => attempt + 1);
+                }}
+                style={{
+                  minHeight: minimumTouchTarget,
+                  justifyContent: 'center',
+                }}
+              >
+                <Text
+                  style={[
+                    theme.typography.label,
+                    { color: theme.colors.accent },
+                  ]}
+                >
+                  Retry
+                </Text>
+              </Pressable>
+            ) : null}
+          </View>
+        }
+        ListEmptyComponent={
+          loading || loadFailed ? null : (
+            <Text
+              selectable
+              style={[
+                theme.typography.body,
+                { color: theme.colors.textMuted, paddingTop: theme.spacing.lg },
+              ]}
+            >
+              No lessons are currently available.
+            </Text>
+          )
+        }
+        renderItem={({ item: row }) => {
+          if (row.kind === 'level') {
+            return (
+              <Text
+                accessibilityRole="header"
+                selectable
+                style={[
+                  theme.typography.sectionTitle,
+                  {
+                    color: theme.colors.text,
+                    paddingTop: theme.spacing.lg,
+                  },
+                ]}
+              >
+                Level {row.level}
+              </Text>
+            );
+          }
+          if (row.kind === 'type') {
+            const hasSelection = row.subjectIds.some((id) =>
+              selection?.isSelected(id),
+            );
+            return (
+              <View
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  gap: theme.spacing.sm,
+                }}
+              >
+                <Text
+                  style={[
+                    theme.typography.caption,
+                    { color: theme.colors.textMuted, flex: 1 },
+                  ]}
+                >
+                  {subjectTypeLabel(row.subjectType)} ({row.count})
+                </Text>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`${hasSelection ? 'Clear' : 'Select'} ${subjectTypeLabel(row.subjectType)} at level ${row.level}`}
+                  disabled={busy || (!hasSelection && selection?.atLimit)}
+                  onPress={() =>
+                    void updateSelection((current) => {
+                      if (hasSelection) current.deselect(row.subjectIds);
+                      else current.select(row.subjectIds);
+                    })
+                  }
+                  style={{
+                    minHeight: minimumTouchTarget,
+                    justifyContent: 'center',
+                    paddingHorizontal: theme.spacing.sm,
+                    opacity:
+                      busy || (!hasSelection && selection?.atLimit) ? 0.5 : 1,
+                  }}
+                >
+                  <Text
+                    style={[
+                      theme.typography.label,
+                      { color: theme.colors.accent },
+                    ]}
+                  >
+                    {hasSelection ? 'Clear' : 'Select group'}
+                  </Text>
+                </Pressable>
+              </View>
+            );
+          }
+          const checked = selection?.isSelected(row.item.subjectId) ?? false;
+          return (
+            <Pressable
+              accessibilityLabel={row.item.primaryMeaning}
+              accessibilityRole="checkbox"
+              accessibilityState={{
+                checked,
+                disabled: busy || (!checked && selection?.atLimit),
+              }}
+              disabled={busy || (!checked && selection?.atLimit)}
+              onPress={() =>
+                void updateSelection((current) =>
+                  current.toggle(row.item.subjectId),
+                )
+              }
+              style={{ minHeight: minimumTouchTarget }}
+            >
+              <Card
+                pointerEvents="none"
+                style={{
+                  alignItems: 'center',
+                  borderColor: checked
+                    ? theme.colors.accent
+                    : theme.colors.border,
+                  borderWidth: 1,
+                  backgroundColor: checked
+                    ? theme.colors.accentSurface
+                    : theme.colors.surface,
+                  flexDirection: 'row',
+                  gap: theme.spacing.lg,
+                }}
+              >
+                <SubjectGlyph
+                  characters={row.item.characters}
+                  type={row.item.subjectType}
+                />
+                <View style={{ flex: 1, gap: theme.spacing.xs }}>
+                  <Text
+                    style={[
+                      theme.typography.sectionTitle,
+                      { color: theme.colors.text },
+                    ]}
+                  >
+                    {row.item.primaryMeaning}
+                  </Text>
+                  <SubjectChip type={row.item.subjectType} />
+                </View>
+                <View
+                  accessibilityElementsHidden
+                  importantForAccessibility="no-hide-descendants"
+                  style={{
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderRadius: 8,
+                    borderWidth: 1,
+                    borderColor: checked
+                      ? theme.colors.accent
+                      : theme.colors.border,
+                    backgroundColor: checked
+                      ? theme.colors.accent
+                      : theme.colors.surface,
+                    height: 26,
+                    width: 26,
+                  }}
+                >
+                  {checked ? (
+                    <Check
+                      size={17}
+                      color={theme.colors.accentForeground}
+                      strokeWidth={2.5}
+                    />
+                  ) : null}
+                </View>
+              </Card>
+            </Pressable>
+          );
+        }}
+      />
+      <View
+        style={{
+          gap: 12,
+          paddingLeft: theme.spacing.xl + insets.left,
+          paddingRight: theme.spacing.xl + insets.right,
+          paddingTop: 16,
+          paddingBottom: theme.spacing.xl + insets.bottom,
+          backgroundColor: theme.colors.surface,
+          borderTopWidth: 1,
+          borderColor: theme.colors.border,
+        }}
+      >
+        {message === null ? null : (
+          <Text
+            accessibilityRole="alert"
+            accessibilityLiveRegion="polite"
+            style={[theme.typography.body, { color: theme.colors.danger }]}
+          >
+            {message}
+          </Text>
+        )}
+        <Text
+          accessibilityLiveRegion="polite"
+          style={[theme.typography.label, { color: theme.colors.text }]}
+        >
+          {Number.isFinite(maxSelection)
+            ? `${selectedCount} of ${maxSelection} selected`
+            : `${selectedCount} selected`}
+        </Text>
+        <View style={{ flexDirection: 'row', gap: 12 }}>
+          <ActionButton
+            disabled={busy}
+            label="Cancel"
+            accessibilityLabel="Cancel lesson selection"
+            onPress={() => void cancel()}
+          />
+          <ActionButton
+            disabled={busy || selectedCount === 0}
+            label={busy ? 'Preparing…' : 'Begin'}
+            accessibilityLabel="Begin selected lessons"
+            onPress={() => void begin()}
+            primary
+          />
+        </View>
+      </View>
+    </View>
   );
 }
 
@@ -364,7 +523,7 @@ export async function loadLessonPickerItems(
        AND a.started_at IS NULL
        AND a.hidden = 0
        AND s.hidden_at IS NULL
-       AND s.level <= (SELECT max_level_granted FROM user LIMIT 1)
+       AND ${SUBJECT_WITHIN_GRANTED_LEVEL}
        AND ${NOT_EXCLUDED}
      ORDER BY s.level, s.lesson_position, s.id`,
   );
@@ -400,6 +559,8 @@ function pickerRows(items: readonly LessonPickerItem[]): readonly PickerRow[] {
         kind: 'type' as const,
         subjectType: section.subjectType,
         count: section.items.length,
+        level: group.level,
+        subjectIds: section.items.map(({ subjectId }) => subjectId),
       },
       ...section.items.map((item) => ({
         key: `subject-${item.subjectId}`,
@@ -446,6 +607,10 @@ function ActionButton({
       onPress={onPress}
       style={{
         alignItems: 'center',
+        flex: 1,
+        flexDirection: 'row',
+        gap: 10,
+        paddingVertical: 12,
         backgroundColor: primary
           ? theme.colors.accent
           : theme.colors.surfaceMuted,
@@ -469,6 +634,9 @@ function ActionButton({
       >
         {label}
       </Text>
+      {primary ? (
+        <ArrowRight size={18} color={theme.colors.accentForeground} />
+      ) : null}
     </Pressable>
   );
 }

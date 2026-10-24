@@ -28,16 +28,11 @@ export function SubjectChip({ type }: SubjectChipProps) {
         backgroundColor: colors.background,
         borderCurve: 'continuous',
         borderRadius: 999,
-        paddingHorizontal: theme.spacing.md,
-        paddingVertical: theme.spacing.sm,
+        paddingHorizontal: theme.spacing.sm,
+        paddingVertical: theme.spacing.xs,
       }}
     >
-      <Text
-        style={[
-          theme.typography.label,
-          { color: colors.foreground },
-        ]}
-      >
+      <Text style={[theme.typography.caption, { color: colors.foreground }]}>
         {label}
       </Text>
     </View>

@@ -17,8 +17,14 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 
+import { Layers3 } from "lucide-react-native";
+import { useScreenPadding } from "@/ui/theme/useScreenPadding";
 import { useTheme } from "@/ui/theme/ThemeProvider";
 
+import {
+  AccountHibernationNotice,
+  isHibernationMessage,
+} from "./AccountHibernationNotice";
 import type { InitialSyncPhase, InitialSyncState } from "./AuthProvider";
 
 interface InitialSyncScreenProps {
@@ -68,13 +74,15 @@ export function InitialSyncScreen({
   onUseAnotherApiKey,
 }: InitialSyncScreenProps) {
   const theme = useTheme();
+  const screenPadding = useScreenPadding();
   const connectionIssues = state.status === "connection-issues";
   const attention = state.status === "attention";
+  const hibernating = attention && isHibernationMessage(state.message);
   const phaseIndex = PHASES.findIndex((phase) => phase.id === state.phase);
 
   return (
     <ScrollView
-      contentContainerStyle={styles.screenContent}
+      contentContainerStyle={[styles.screenContent, screenPadding]}
       contentInsetAdjustmentBehavior="automatic"
       testID="initial-sync-screen"
       style={[styles.screen, { backgroundColor: theme.colors.canvas }]}
@@ -86,16 +94,11 @@ export function InitialSyncScreen({
         <View
           style={[styles.brandMark, { backgroundColor: theme.colors.accent }]}
         >
-          <Text
-            accessibilityElementsHidden
-            importantForAccessibility="no-hide-descendants"
-            style={[
-              styles.brandGlyph,
-              { color: theme.colors.accentForeground },
-            ]}
-          >
-            多
-          </Text>
+          <Layers3
+            size={36}
+            color={theme.colors.accentForeground}
+            strokeWidth={1.7}
+          />
         </View>
         <Text
           accessibilityLiveRegion="polite"
@@ -104,19 +107,25 @@ export function InitialSyncScreen({
         >
           {connectionIssues
             ? "Connection issues"
-            : attention
-              ? "Setup needs attention"
-              : "Preparing Taatoru"}
+            : hibernating
+              ? "Finish connecting"
+              : attention
+                ? "Setup needs attention"
+                : "Preparing Taatoru"}
         </Text>
         <Text style={[styles.intro, { color: theme.colors.textMuted }]}>
           {connectionIssues
             ? "Your progress is safe. Taatoru will try again automatically when your connection returns."
-            : attention
-              ? (state.message ??
-                "Taatoru could not finish setting up your account.")
-              : "We’re creating your private offline library. You can start learning as soon as this finishes."}
+            : hibernating
+              ? "Your setup is waiting for access to your WaniKani account."
+              : attention
+                ? (state.message ??
+                  "Taatoru could not finish setting up your account.")
+                : "We’re creating your private offline library. You can start learning as soon as this finishes."}
         </Text>
       </Animated.View>
+
+      {hibernating ? <AccountHibernationNotice /> : null}
 
       <View
         style={[

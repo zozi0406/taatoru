@@ -4,6 +4,7 @@ import { Platform } from 'react-native';
 import type { Database } from '@/db/Database';
 import { NOT_EXCLUDED } from '@/db/repositories/AssignmentRepository';
 import { DerivedRepository } from '@/db/repositories/DerivedRepository';
+import { SUBJECT_WITHIN_GRANTED_LEVEL } from '@/db/subscription';
 import {
   buildReviewNotificationSchedule,
   type ReviewNotificationInput,
@@ -69,11 +70,11 @@ export class ExpoNotificationPlatform implements NotificationPlatform {
   async createChannel(): Promise<void> {
     if (Platform.OS === 'android') {
       await Promise.all([
+        // Sound strings name bundled files; omitting sound uses Android's default.
         Notifications.setNotificationChannelAsync('reviews', {
           name: 'Review availability',
           importance: Notifications.AndroidImportance.DEFAULT,
           showBadge: true,
-          sound: 'default',
         }),
         Notifications.setNotificationChannelAsync('reviews-silent', {
           name: 'Review availability (silent)',
@@ -116,7 +117,7 @@ export class ExpoNotificationPlatform implements NotificationPlatform {
         title: notification.body === null ? undefined : 'Reviews available',
         body: notification.body ?? undefined,
         badge: notification.badge ?? undefined,
-        sound: notification.sound ? 'default' : undefined,
+        sound: notification.sound,
         data: {
           cumulativeCount: notification.cumulativeCount,
           newCount: notification.newCount,
@@ -162,7 +163,7 @@ export async function loadReviewNotificationInput(
          AND a.available_at > ?
          AND a.hidden = 0
          AND s.hidden_at IS NULL
-         AND s.level <= (SELECT max_level_granted FROM user LIMIT 1)
+         AND ${SUBJECT_WITHIN_GRANTED_LEVEL}
          AND ${NOT_EXCLUDED}
        ORDER BY a.available_at`,
       [now.toISOString()],

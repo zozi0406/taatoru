@@ -80,6 +80,40 @@ test('ignores attempts to select an unavailable subject', () => {
   expect(selection.selectedIds).toEqual([]);
 });
 
+test('caps restored and toggled selections while allowing deselection at the limit', () => {
+  const selection = new LessonSelection(
+    [
+      candidate(1, 'kanji', 1),
+      candidate(2, 'kanji', 1),
+      candidate(3, 'kanji', 1),
+    ],
+    [1, 2, 3],
+    2,
+  );
+  expect(selection.selectedIds).toEqual([1, 2]);
+  selection.toggle(3);
+  expect(selection.selectedIds).toEqual([1, 2]);
+  selection.toggle(1);
+  selection.toggle(3);
+  expect(selection.selectedIds).toEqual([2, 3]);
+});
+
+test('selects a group in display order up to the limit and can clear that group', () => {
+  const selection = new LessonSelection(
+    [
+      candidate(3, 'kanji', 1),
+      candidate(1, 'radical', 1),
+      candidate(2, 'kanji', 1),
+    ],
+    [1],
+    2,
+  );
+  selection.select([3, 2]);
+  expect(selection.selectedIds).toEqual([1, 2]);
+  selection.deselect([2, 3]);
+  expect(selection.selectedIds).toEqual([1]);
+});
+
 function candidate(
   subjectId: number,
   subjectType: LessonCandidate['subjectType'],

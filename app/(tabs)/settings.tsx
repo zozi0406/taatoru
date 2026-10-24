@@ -1,46 +1,14 @@
-import { Text } from 'react-native';
-
-import { Card } from '@/ui/components/Card';
-import { Screen } from '@/ui/components/Screen';
-import { useTheme } from '@/ui/theme/ThemeProvider';
+import { useFocusEffect } from 'expo-router';
+import { useCallback, useState } from 'react';
+import { StudySettingsContainer } from '@/features/settings/StudySettingsContainer';
 
 export default function SettingsScreen() {
-  const theme = useTheme();
-  return (
-    <Screen
-      title="Settings"
-      intro={
-        <Text
-          selectable
-          style={[
-            theme.typography.body,
-            { color: theme.colors.textMuted },
-          ]}
-        >
-          Manage synchronization, account access, and study preferences.
-        </Text>
-      }
-    >
-      <Card>
-        <Text
-          selectable
-          style={[
-            theme.typography.sectionTitle,
-            { color: theme.colors.text },
-          ]}
-        >
-          WaniKani account
-        </Text>
-        <Text
-          selectable
-          style={[
-            theme.typography.body,
-            { color: theme.colors.textMuted },
-          ]}
-        >
-          Credentials are stored securely on this device.
-        </Text>
-      </Card>
-    </Screen>
+  const [visit, setVisit] = useState(0);
+  // Native tabs retain their screens; discard a draft when returning from study.
+  useFocusEffect(
+    useCallback(() => {
+      setVisit((value) => value + 1);
+    }, []),
   );
+  return <StudySettingsContainer key={visit} />;
 }

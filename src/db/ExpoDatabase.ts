@@ -15,10 +15,7 @@ type ExpoConnection = Pick<
 class ExpoExecutor implements DatabaseTransaction {
   constructor(private readonly database: ExpoConnection) {}
 
-  async run(
-    sql: string,
-    params: readonly SqlValue[] = [],
-  ): Promise<RunResult> {
+  async run(sql: string, params: readonly SqlValue[] = []): Promise<RunResult> {
     const result = await this.database.runAsync(sql, [...params]);
     return {
       changes: result.changes,
@@ -26,17 +23,11 @@ class ExpoExecutor implements DatabaseTransaction {
     };
   }
 
-  first<T>(
-    sql: string,
-    params: readonly SqlValue[] = [],
-  ): Promise<T | null> {
+  first<T>(sql: string, params: readonly SqlValue[] = []): Promise<T | null> {
     return this.database.getFirstAsync<T>(sql, [...params]);
   }
 
-  all<T>(
-    sql: string,
-    params: readonly SqlValue[] = [],
-  ): Promise<readonly T[]> {
+  all<T>(sql: string, params: readonly SqlValue[] = []): Promise<readonly T[]> {
     return this.database.getAllAsync<T>(sql, [...params]);
   }
 }
@@ -51,30 +42,30 @@ export class ExpoDatabase implements Database {
 
   static async open(name = 'taatoru.db'): Promise<ExpoDatabase> {
     const database = await SQLite.openDatabaseAsync(name, {
+      // A provider remount owns a distinct handle; cleanup cannot close its successor.
+      useNewConnection: true,
       // Expo's blanket finalizer can double-free FTS5 internal statements.
       finalizeUnusedStatementsBeforeClosing: false,
     });
+    // Activity restarts and background tasks can briefly overlap connections.
+    try {
+      await database.runAsync('PRAGMA busy_timeout = 5000');
+    } catch (error) {
+      await database.closeAsync().catch(() => undefined);
+      throw error;
+    }
     return new ExpoDatabase(database);
   }
 
-  run(
-    sql: string,
-    params: readonly SqlValue[] = [],
-  ): Promise<RunResult> {
+  run(sql: string, params: readonly SqlValue[] = []): Promise<RunResult> {
     return this.enqueue(() => this.executor.run(sql, params));
   }
 
-  first<T>(
-    sql: string,
-    params: readonly SqlValue[] = [],
-  ): Promise<T | null> {
+  first<T>(sql: string, params: readonly SqlValue[] = []): Promise<T | null> {
     return this.enqueue(() => this.executor.first<T>(sql, params));
   }
 
-  all<T>(
-    sql: string,
-    params: readonly SqlValue[] = [],
-  ): Promise<readonly T[]> {
+  all<T>(sql: string, params: readonly SqlValue[] = []): Promise<readonly T[]> {
     return this.enqueue(() => this.executor.all<T>(sql, params));
   }
 
@@ -84,12 +75,11 @@ export class ExpoDatabase implements Database {
     return this.enqueue(async () => {
       let completed = false;
       let result: T | undefined;
-      await this.database.withExclusiveTransactionAsync(
-        async (transaction) => {
-          result = await operation(new ExpoExecutor(transaction));
-          completed = true;
-        },
-      );
+      await this.database.withExclusiveTransactionAsync(async (transaction) => {
+        await transaction.runAsync('PRAGMA busy_timeout = 5000');
+        result = await operation(new ExpoExecutor(transaction));
+        completed = true;
+      });
 
       if (!completed) {
         throw new Error('SQLite transaction completed without a result');

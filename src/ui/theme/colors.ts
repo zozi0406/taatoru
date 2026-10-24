@@ -1,11 +1,14 @@
 export interface ThemeColors {
   readonly accent: string;
   readonly accentForeground: string;
+  readonly accentSurface: string;
   readonly border: string;
   readonly canvas: string;
   readonly danger: string;
   readonly dangerSurface: string;
   readonly focus: string;
+  readonly success: string;
+  readonly successSurface: string;
   readonly surface: string;
   readonly surfaceMuted: string;
   readonly text: string;
@@ -13,36 +16,50 @@ export interface ThemeColors {
 }
 
 export const lightColors: ThemeColors = {
-  accent: '#2563EB',
+  accent: '#BB126C',
   accentForeground: '#FFFFFF',
-  border: '#DCE1E8',
-  canvas: '#F5F7FA',
+  accentSurface: '#FCEAF4',
+  border: '#E4E1EC',
+  canvas: '#F6F5FA',
   danger: '#B42318',
   dangerSurface: '#FEECEB',
-  focus: '#1D4ED8',
+  focus: '#9C165E',
+  success: '#17745C',
+  successSurface: '#E4F5EE',
   surface: '#FFFFFF',
-  surfaceMuted: '#EDF1F5',
-  text: '#17202A',
-  textMuted: '#5C6673',
+  surfaceMuted: '#EFEDF5',
+  text: '#242133',
+  textMuted: '#696479',
 };
 
 export const darkColors: ThemeColors = {
-  accent: '#6EA0FF',
-  accentForeground: '#07152E',
-  border: '#303844',
-  canvas: '#0E1218',
+  accent: '#FF80C3',
+  accentForeground: '#350B24',
+  accentSurface: '#342035',
+  border: '#2B2D40',
+  canvas: '#0D0F19',
   danger: '#FF8A80',
   dangerSurface: '#3A1D20',
-  focus: '#8CB4FF',
-  surface: '#171D25',
-  surfaceMuted: '#212934',
-  text: '#F4F6F8',
-  textMuted: '#A8B1BD',
+  focus: '#FFB2DA',
+  success: '#7EDDB9',
+  successSurface: '#16352F',
+  surface: '#171A29',
+  surfaceMuted: '#222538',
+  text: '#F4F2FC',
+  textMuted: '#ABA8C0',
 };
 
 export const subjectColors = {
-  radical: { background: '#007EA5', foreground: '#FFFFFF' },
-  kanji: { background: '#C92F76', foreground: '#FFFFFF' },
-  vocabulary: { background: '#7040C8', foreground: '#FFFFFF' },
-  kana_vocabulary: { background: '#4F3AA8', foreground: '#FFFFFF' },
+  radical: { background: '#087EA4', foreground: '#FFFFFF' },
+  kanji: { background: '#C21D78', foreground: '#FFFFFF' },
+  vocabulary: { background: '#7151C7', foreground: '#FFFFFF' },
+  kana_vocabulary: { background: '#5D4AB2', foreground: '#FFFFFF' },
+} as const;
+
+export const srsColors = {
+  apprentice: '#C43C8B',
+  guru: '#9164D5',
+  master: '#527EC7',
+  enlightened: '#268891',
+  burned: '#B07B35',
 } as const;

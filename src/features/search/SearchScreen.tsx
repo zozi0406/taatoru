@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { ChevronRight, Search as SearchIcon } from 'lucide-react-native';
 import {
   ActivityIndicator,
   FlatList,
@@ -9,6 +10,9 @@ import {
 } from 'react-native';
 
 import { Card } from '@/ui/components/Card';
+import { PageHeading } from '@/ui/components/PageHeading';
+import { SubjectGlyph } from '@/ui/components/SubjectGlyph';
+import { useScreenPadding } from '@/ui/theme/useScreenPadding';
 import { SubjectChip } from '@/ui/components/SubjectChip';
 import { minimumTouchTarget } from '@/ui/theme/spacing';
 import { useTheme } from '@/ui/theme/ThemeProvider';
@@ -26,6 +30,7 @@ export function SearchScreen({
   onOpenSubject,
 }: SearchScreenProps) {
   const theme = useTheme();
+  const screenPadding = useScreenPadding();
   const requestId = useRef(0);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<readonly SubjectSearchResult[]>([]);
@@ -67,7 +72,7 @@ export function SearchScreen({
       contentContainerStyle={{
         flexGrow: 1,
         gap: theme.spacing.md,
-        padding: theme.spacing.xl,
+        ...screenPadding,
       }}
       data={results}
       extraData={{ error, query, searching }}
@@ -76,51 +81,59 @@ export function SearchScreen({
       style={{ backgroundColor: theme.colors.canvas }}
       ListHeaderComponent={
         <View style={{ gap: theme.spacing.lg }}>
-          <View style={{ gap: theme.spacing.sm }}>
-            <Text
-              accessibilityRole="header"
-              selectable
-              style={[
-                theme.typography.screenTitle,
-                { color: theme.colors.text },
-              ]}
-            >
-              Search
-            </Text>
-            <Text
-              selectable
+          <PageHeading
+            title="Search"
+            eyebrow="EXPLORE YOUR LIBRARY"
+            intro={
+              <Text
+                style={[
+                  theme.typography.body,
+                  { color: theme.colors.textMuted },
+                ]}
+              >
+                Every kanji has a connection. Find yours.
+              </Text>
+            }
+          />
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 10,
+              backgroundColor: theme.colors.surface,
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+              borderRadius: 16,
+              paddingHorizontal: 16,
+            }}
+          >
+            <SearchIcon size={20} color={theme.colors.textMuted} />
+            <TextInput
+              accessibilityLabel="Search subjects"
+              autoCapitalize="none"
+              autoCorrect={false}
+              clearButtonMode="while-editing"
+              onChangeText={(value) => void search(value)}
+              placeholder="Search your local library"
+              placeholderTextColor={theme.colors.textMuted}
+              returnKeyType="search"
               style={[
                 theme.typography.body,
-                { color: theme.colors.textMuted },
+                {
+                  backgroundColor: theme.colors.surface,
+                  borderColor: theme.colors.border,
+                  borderRadius: 14,
+                  color: theme.colors.text,
+                  minHeight: minimumTouchTarget,
+                  flex: 1,
+                  borderWidth: 0,
+                  paddingVertical: 14,
+                  paddingHorizontal: 0,
+                },
               ]}
-            >
-              Find cached subjects by characters, readings, meanings, or
-              synonyms.
-            </Text>
+              value={query}
+            />
           </View>
-          <TextInput
-            accessibilityLabel="Search subjects"
-            autoCapitalize="none"
-            autoCorrect={false}
-            clearButtonMode="while-editing"
-            onChangeText={(value) => void search(value)}
-            placeholder="Search your local library"
-            placeholderTextColor={theme.colors.textMuted}
-            returnKeyType="search"
-            style={[
-              theme.typography.body,
-              {
-                backgroundColor: theme.colors.surface,
-                borderColor: theme.colors.border,
-                borderRadius: 14,
-                borderWidth: 1,
-                color: theme.colors.text,
-                minHeight: minimumTouchTarget,
-                paddingHorizontal: theme.spacing.lg,
-              },
-            ]}
-            value={query}
-          />
           {searching ? (
             <ActivityIndicator accessibilityLabel="Searching local library" />
           ) : null}
@@ -136,16 +149,62 @@ export function SearchScreen({
         </View>
       }
       ListEmptyComponent={
-        query.trim().length > 0 && !searching && error === null ? (
-          <Text
-            selectable
-            style={[
-              theme.typography.body,
-              { color: theme.colors.textMuted, paddingTop: theme.spacing.lg },
-            ]}
+        query.trim().length === 0 ? (
+          <View
+            style={{
+              alignItems: 'center',
+              gap: 14,
+              paddingTop: 64,
+              paddingHorizontal: 16,
+            }}
           >
-            No matching subjects
-          </Text>
+            <View
+              style={{
+                backgroundColor: theme.colors.accentSurface,
+                borderRadius: 24,
+                padding: 22,
+              }}
+            >
+              <SearchIcon
+                size={34}
+                strokeWidth={1.5}
+                color={theme.colors.accent}
+              />
+            </View>
+            <Text
+              style={[
+                theme.typography.sectionTitle,
+                { color: theme.colors.text },
+              ]}
+            >
+              A whole language to explore
+            </Text>
+            <Text
+              style={[
+                theme.typography.body,
+                { color: theme.colors.textMuted, textAlign: 'center' },
+              ]}
+            >
+              Search by characters, readings, meanings, or your own synonyms.
+              Available offline.
+            </Text>
+          </View>
+        ) : !searching && error === null ? (
+          <View style={{ gap: 8, paddingTop: 32 }}>
+            <Text
+              style={[
+                theme.typography.sectionTitle,
+                { color: theme.colors.text },
+              ]}
+            >
+              No matching subjects
+            </Text>
+            <Text
+              style={[theme.typography.body, { color: theme.colors.textMuted }]}
+            >
+              Try a meaning, reading, or different spelling.
+            </Text>
+          </View>
         ) : null
       }
       renderItem={({ item }) => (
@@ -153,7 +212,10 @@ export function SearchScreen({
           accessibilityLabel={`Open ${item.primaryMeaning}`}
           accessibilityRole="button"
           onPress={() => onOpenSubject(item.id)}
-          style={{ minHeight: minimumTouchTarget }}
+          style={({ pressed }) => ({
+            minHeight: minimumTouchTarget,
+            opacity: pressed ? 0.7 : 1,
+          })}
         >
           <Card
             style={{
@@ -162,15 +224,7 @@ export function SearchScreen({
               gap: theme.spacing.lg,
             }}
           >
-            <Text
-              selectable
-              style={[
-                theme.typography.screenTitle,
-                { color: theme.colors.text, minWidth: 52 },
-              ]}
-            >
-              {item.characters ?? '◻︎'}
-            </Text>
+            <SubjectGlyph characters={item.characters} type={item.object} />
             <View style={{ flex: 1, gap: theme.spacing.xs }}>
               <Text
                 selectable
@@ -195,6 +249,7 @@ export function SearchScreen({
               </Text>
               <SubjectChip type={item.object} />
             </View>
+            <ChevronRight size={18} color={theme.colors.textMuted} />
           </Card>
         </Pressable>
       )}

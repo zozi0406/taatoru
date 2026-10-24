@@ -6,11 +6,7 @@ const mockScreenNames: string[] = [];
 
 jest.mock('expo-router', () => {
   const React = jest.requireActual('react');
-  function MockStack({
-    children,
-  }: {
-    readonly children: React.ReactNode;
-  }) {
+  function MockStack({ children }: { readonly children: React.ReactNode }) {
     return React.createElement(React.Fragment, null, children);
   }
   function MockScreen({ name }: { readonly name: string }) {
@@ -24,9 +20,7 @@ jest.mock('expo-router', () => {
     readonly children: React.ReactNode;
     readonly guard: boolean;
   }) {
-    return guard
-      ? React.createElement(React.Fragment, null, children)
-      : null;
+    return guard ? React.createElement(React.Fragment, null, children) : null;
   }
   MockStack.Screen = MockScreen;
   MockStack.Protected = MockProtected;
@@ -44,11 +38,6 @@ jest.mock('@/app/AppProviders', () => ({
 
 jest.mock('@/features/auth/AuthProvider', () => ({
   useAuth: () => ({ status: 'unauthenticated' }),
-}));
-
-jest.mock('@/ui/theme/ThemeProvider', () => ({
-  ThemeProvider: ({ children }: { readonly children: React.ReactNode }) =>
-    children,
 }));
 
 beforeEach(() => {

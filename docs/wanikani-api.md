@@ -1,6 +1,6 @@
 # WaniKani API integration
 
-Last validated: 4 August 2026
+Last validated: 5 August 2026
 
 Taatoru uses the [WaniKani API v2 revision
 20170710](https://docs.api.wanikani.com/20170710/). This document summarizes the
@@ -54,35 +54,36 @@ Relevant official sections:
 
 Taatoru is **partially aligned** with the official best practices. Its basic
 request contract, durable local cache, pagination, and most incremental reads
-are sound. It is not yet fully compliant with the subscription-access guidance,
-and its cache and rate-limit handling leave avoidable correctness and network
-risks.
+are sound, and its subject-content queries now respect the granted subscription
+level. Its cache and rate-limit handling still leave avoidable correctness and
+network risks.
 
-| Area | Status | Current evidence |
-| --- | --- | --- |
-| HTTPS, authentication, and revision | Compliant | `HttpWaniKaniApi.request()` uses the HTTPS v2 base URL and sends Bearer authentication plus `Wanikani-Revision: 20170710`. Client tests assert both headers. |
-| Response envelopes and pagination | Compliant | `decodeResource()`, `decodeCollectionPage()`, and `fetchAllPages()` validate envelopes and follow `pages.next_url` with repeated-URL protection. |
-| Durable local caching | Compliant | Server resources and synchronization cursors are stored in SQLite. Full refresh replacement is transactional, and subject data is available offline. |
-| Incremental synchronization | Partial | Subjects, assignments, study materials, voice actors, and review statistics use `updated_after`. Level progressions are downloaded in full on every quick sync. |
-| Empty incremental responses | Compliant | `HttpWaniKaniApi` falls back to the supplied `updated_after` cursor when an incremental response has `data_updated_at: null`. A focused client test covers all five incremental collections. |
-| Hidden-resource transitions | Gap | Incremental subject, assignment, and review-statistic reads request `hidden=false`. A resource that changes from visible to hidden no longer matches that filtered scope, so its previously cached visible row can survive until a full refresh. |
-| Conditional requests | Gap | The client neither stores response `ETag`/`Last-Modified` values nor sends `If-None-Match`/`If-Modified-Since`, and it does not accept `304` as a successful cache result. |
-| Rate-limit handling | Partial | Taatoru keeps a local 60-request server-minute estimate and budgets pending writes. It ignores the official `RateLimit-*` headers, and `429` recovery reads `Retry-After` rather than the documented `RateLimit-Reset`. |
-| Subscription restrictions | Partial | Lesson, review, dashboard, and notification availability queries cap content at `max_level_granted`. Search, direct subject details, related subjects, analytics labels, and resumed session subject loads do not consistently apply that cap. |
-| Token handling and diagnostics | Compliant | Tokens are kept in SecureStore rather than SQLite, query strings are removed from stored diagnostic URLs, and authorization headers are not logged. |
+| Area                                | Status    | Current evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| -------------------------------------| -----------| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| HTTPS, authentication, and revision | Compliant | `HttpWaniKaniApi.request()` uses the HTTPS v2 base URL and sends Bearer authentication plus `Wanikani-Revision: 20170710`. Client tests assert both headers.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Response envelopes and pagination   | Compliant | `decodeResource()`, `decodeCollectionPage()`, and `fetchAllPages()` validate envelopes and follow `pages.next_url` with repeated-URL protection.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Durable local caching               | Compliant | Server resources and synchronization cursors are stored in SQLite. Full refresh replacement is transactional, and subject data is available offline.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Incremental synchronization         | Partial   | Subjects, assignments, study materials, voice actors, and review statistics use `updated_after`. Quick sync refreshes the user first so a higher `max_level_granted` clears the subject cursor and downloads newly granted subjects in the same run. Level progressions are downloaded in full on every quick sync.                                                                                                                                                                                                                                                                                                                            |
+| Empty incremental responses         | Compliant | When an incremental response has `data_updated_at: null`, `HttpWaniKaniApi` preserves the `updated_after` value sent with the request. This prevents a no-change sync from clearing a valid cursor and triggering a full collection download on the next sync. A focused client test covers all five incremental collections.                                                                                                                                                                                                                                                                                                                  |
+| Hidden-resource transitions         | Gap       | Incremental subject, assignment, and review-statistic reads request `hidden=false`. A resource that changes from visible to hidden no longer matches that filtered scope, so its previously cached visible row can survive until a full refresh.                                                                                                                                                                                                                                                                                                                                                                                               |
+| Conditional requests                | Gap       | The client neither stores response `ETag`/`Last-Modified` values nor sends `If-None-Match`/`If-Modified-Since`, and it does not accept `304` as a successful cache result.                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Rate-limit handling                 | Partial   | Taatoru reads valid `RateLimit-Limit`, `RateLimit-Remaining`, and `RateLimit-Reset` values from every response and uses the server's remaining count to budget pending writes, with local minute accounting as a safe fallback. A `429` prefers `Retry-After` and falls back to `RateLimit-Reset`. Global request scheduling and pagination pacing are not implemented.                                                                                                                                                                                                                                                                        |
+| Subscription restrictions           | Compliant | User-facing subject queries share the `max_level_granted` boundary, including lessons, reviews, search, direct and related subject details, analytics, notifications, and resumed sessions. Quick sync checks the current grant before its incremental subject read, so increases take effect without a second sync. Mixed saved sessions prune inaccessible items while preserving eligible queue and answer state; fully inaccessible lessons return to the picker, and fully inaccessible reviews rebuild from eligible items. Focused fixtures cover level-3 and level-60 grants; gating does not infer access from `subscription.active`. |
+| Token handling and diagnostics      | Compliant | Tokens are kept in SecureStore rather than SQLite, query strings are removed from stored diagnostic URLs, and authorization headers are not logged.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 ## Validation evidence
 
-The 4 August 2026 audit used:
+The 4–5 August 2026 validation used:
 
 - the live official revision-20170710 reference, including its getting-started,
   rate-limit, best-practices, subjects, assignments, level-progressions, and
   user sections;
 - static inspection of the implementation paths listed below; and
-- the complete project gate: ESLint, TypeScript checking, and all 210 Jest
-  tests across 46 suites. The suite includes the API client, pagination,
+- the complete project gate: ESLint, TypeScript checking, all 234 Jest tests
+  across 47 suites, and all 13 release-configuration tests. The Jest suite
+  includes the API client, pagination,
   rate-limit tracker, synchronization, resource repositories, search, subject
-  details, similar kanji, and analytics; and
+  details, similar kanji, analytics, and resumed sessions; and
 - a live, read-only check of all five incremental collections using a cursor
   one minute in the past. Each endpoint returned an empty collection and the
   client preserved the supplied cursor.
@@ -95,21 +96,14 @@ other documented gaps into compliant behavior.
 
 Address these items before treating the integration as fully aligned:
 
-1. Enforce `max_level_granted` at the shared subject-content boundary, including
-   search, direct routes, related and similar subjects, analytics labels, and
-   resumed lesson or review sessions. Add free-account and subscription-
-   downgrade tests.
-2. Fetch hidden transitions during incremental synchronization, then keep
+1. Fetch hidden transitions during incremental synchronization, then keep
    hidden rows cached only if needed while excluding them from user-facing
    queries.
-3. Read `RateLimit-Limit`, `RateLimit-Remaining`, and `RateLimit-Reset` from
-   every response. Pace requests using those server values and make `429`
-   retries honor `RateLimit-Reset`.
-4. Add conditional reads for stable endpoints, beginning with `user` and
+2. Add conditional reads for stable endpoints, beginning with `user` and
    `level_progressions`, and handle `304` without attempting to decode JSON.
-5. Replace the unconditional quick-sync download of level progressions with
+3. Replace the unconditional quick-sync download of level progressions with
    `updated_after` or a conditional request.
-6. Re-evaluate speculative parallel pagination after server-derived rate-limit
+4. Re-evaluate speculative parallel pagination after server-derived rate-limit
    budgeting is available so a full refresh cannot create an avoidable burst.
 
 ## Existing implementation map
@@ -124,10 +118,10 @@ Address these items before treating the integration as fully aligned:
   `src/features/sync/SyncRepository.ts` and the repositories under
   `src/db/repositories/`
 - Secure token storage: `src/features/auth/tokenStore.ts`
-- Subscription-aware lessons and reviews:
-  `src/db/repositories/AssignmentRepository.ts` and
-  `src/db/repositories/DerivedRepository.ts`
-- Subject-content paths requiring a shared subscription gate:
+- Shared subject-content grant boundary: `src/db/subscription.ts`
+- Subscription-aware subject-content paths:
+  `src/db/repositories/AssignmentRepository.ts`,
+  `src/db/repositories/DerivedRepository.ts`,
   `src/features/search/search.ts`, `src/features/subjects/subjectDetails.ts`,
   `src/features/subjects/similarKanji.ts`,
   `src/features/analytics/calculations.ts`, and the session repositories
@@ -153,6 +147,8 @@ subject-content queries, or WaniKani permissions:
   across search, details, relationships, analytics, lessons, reviews,
   notifications, deep links, and resumed sessions.
 - [ ] Test a subscription downgrade without clearing the existing local cache.
+- [ ] Test a subscription upgrade during quick sync and confirm newly granted
+  subjects download in that same run.
 - [ ] Confirm tokens, authorization headers, notes, answers, and full query
   strings do not enter logs or diagnostics.
 - [ ] Run the API, synchronization, database-repository, search, subject,

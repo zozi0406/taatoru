@@ -1,6 +1,7 @@
 import {
   assignmentFixture,
   collectionPage,
+  kanaVocabularyFixture,
   kanjiFixture,
   levelProgressionFixture,
   reviewStatisticFixture,
@@ -364,6 +365,40 @@ test('an increased subscription level resets the subject cursor', async () => {
   }
 });
 
+test('quick sync downloads newly granted subjects in the same run', async () => {
+  const db = await populatedDatabase();
+  try {
+    await db.run('UPDATE user SET max_level_granted = 3');
+    const api = fullRefreshApi();
+    api.getSubjects.mockImplementation(async (updatedAfter) =>
+      collectionPage(updatedAfter === null ? [kanaVocabularyFixture] : []),
+    );
+    const engine = new SynchronizationEngine({
+      api,
+      repository: new SyncRepository(db),
+      pendingWrites: {
+        sendSelectedPendingWrites: async () => undefined,
+      },
+      isOnline: async () => true,
+      invalidate: () => undefined,
+      updateNotifications: () => undefined,
+      now: () => NOW,
+    });
+
+    await expect(engine.synchronize('quick')).resolves.toMatchObject({
+      status: 'completed',
+    });
+    expect(api.getSubjects).toHaveBeenCalledWith(null);
+    await expect(
+      db.first('SELECT level FROM subjects WHERE id = ?', [
+        kanaVocabularyFixture.id,
+      ]),
+    ).resolves.toEqual({ level: 8 });
+  } finally {
+    await db.close();
+  }
+});
+
 async function populatedDatabase(): Promise<NodeTestDatabase> {
   const db = await NodeTestDatabase.open();
   await migrateDatabase(db);
@@ -431,6 +466,7 @@ function fullRefreshApi() {
     },
   } as unknown as WaniKaniApi & {
     getAssignments: jest.MockedFunction<WaniKaniApi['getAssignments']>;
+    getSubjects: jest.MockedFunction<WaniKaniApi['getSubjects']>;
   };
 }
 

@@ -359,6 +359,9 @@ export class HttpWaniKaniApi implements WaniKaniApi {
     const responseReceivedAtMs = this.now();
     this.rateLimitTracker.recordResponse({
       serverDate: response.headers.get('Date'),
+      rateLimitLimit: response.headers.get('RateLimit-Limit'),
+      rateLimitRemaining: response.headers.get('RateLimit-Remaining'),
+      rateLimitReset: response.headers.get('RateLimit-Reset'),
       requestStartedAtMs,
       responseReceivedAtMs,
     });
@@ -376,7 +379,10 @@ export class HttpWaniKaniApi implements WaniKaniApi {
       retryAt: parseRetryAt(
         response.headers.get('Retry-After'),
         responseReceivedAtMs,
-      ),
+      ) ??
+        (response.status === 429
+          ? parseRateLimitReset(response.headers.get('RateLimit-Reset'))
+          : undefined),
     });
   }
 
@@ -499,6 +505,17 @@ function parseRetryAt(value: string | null, now: number): Date | undefined {
 
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) ? new Date(timestamp) : undefined;
+}
+
+function parseRateLimitReset(value: string | null): Date | undefined {
+  if (value === null) {
+    return undefined;
+  }
+
+  const epochSeconds = Number(value);
+  return Number.isFinite(epochSeconds) && epochSeconds >= 0
+    ? new Date(epochSeconds * 1000)
+    : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

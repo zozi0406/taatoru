@@ -66,6 +66,21 @@ test('derived reviews, hourly buckets, SRS counts, and leeches are stable', asyn
   }
 });
 
+test('max_level_granted remains authoritative when subscription_active is true', async () => {
+  const db = await availabilityDatabase();
+  try {
+    await db.run('UPDATE user SET subscription_active = 1');
+
+    expect(
+      (await new AssignmentRepository(db).getAvailableLessons(FIXED_NOW)).map(
+        ({ subjectId }) => subjectId,
+      ),
+    ).toEqual([101, 105]);
+  } finally {
+    await db.close();
+  }
+});
+
 async function availabilityDatabase(): Promise<NodeTestDatabase> {
   const db = await NodeTestDatabase.open();
   await migrateDatabase(db);
@@ -112,7 +127,10 @@ function freeUser(): Resource<UserData, 'user'> {
       level: 3,
       subscription: {
         ...userFixture.data.subscription,
+        active: false,
         max_level_granted: 3,
+        period_ends_at: null,
+        type: 'free',
       },
     },
   };

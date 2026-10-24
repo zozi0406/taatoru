@@ -1,4 +1,12 @@
 import type { SubjectObject } from '@/api/types';
+import {
+  DEFAULT_STUDY_SETTINGS,
+  type StudySettings,
+} from '@/features/settings/studySettings';
+import {
+  advanceStudyQuestion,
+  firstStudyPrompt,
+} from '@/features/sessions/studyScheduler';
 import type {
   LessonPrompt,
   LessonSessionItem,
@@ -7,8 +15,13 @@ import type {
 
 export type LessonEvent =
   | { readonly type: 'advance-presentation' }
+  | { readonly type: 'previous-presentation' }
+  | { readonly type: 'start-quiz' }
   | { readonly type: 'correct' }
-  | { readonly type: 'incorrect' };
+  | { readonly type: 'incorrect' }
+  | { readonly type: 'continue-incorrect' }
+  | { readonly type: 'override-correct' }
+  | { readonly type: 'skip' };
 
 export interface LessonTransition {
   readonly completedItem: LessonSessionItem | null;
@@ -19,12 +32,28 @@ export function reduceLesson(
   snapshot: LessonSessionSnapshot,
   event: LessonEvent,
   subjectTypes: Readonly<Record<number, SubjectObject>>,
+  options: StudySettings = DEFAULT_STUDY_SETTINGS,
 ): LessonTransition {
   if (
-    event.type === 'advance-presentation' &&
+    event.type === 'previous-presentation' &&
     snapshot.phase === 'presentation'
   ) {
-    if (snapshot.queuePosition + 1 < snapshot.items.length) {
+    return {
+      completedItem: null,
+      snapshot: {
+        ...snapshot,
+        queuePosition: Math.max(0, snapshot.queuePosition - 1),
+      },
+    };
+  }
+  if (
+    (event.type === 'advance-presentation' || event.type === 'start-quiz') &&
+    snapshot.phase === 'presentation'
+  ) {
+    if (
+      event.type !== 'start-quiz' &&
+      snapshot.queuePosition + 1 < snapshot.items.length
+    ) {
       return {
         completedItem: null,
         snapshot: {
@@ -42,8 +71,16 @@ export function reduceLesson(
         queuePosition: 0,
         quizState: {
           ...snapshot.quizState,
-          currentPrompt: first === undefined ? null : 'meaning',
+          currentPrompt:
+            first === undefined
+              ? null
+              : firstStudyPrompt(
+                  subjectTypes[first.subjectId],
+                  options.questionOrder,
+                  first.subjectId,
+                ),
           currentSubjectId: first?.subjectId ?? null,
+          questionProgress: {},
         },
       },
     };
@@ -61,51 +98,70 @@ export function reduceLesson(
       snapshot: recordIncorrect(snapshot),
     };
   }
-  if (event.type !== 'correct') {
-    return { completedItem: null, snapshot };
-  }
-
-  const currentSubjectId = snapshot.quizState.currentSubjectId;
-  const currentType = subjectTypes[currentSubjectId];
   if (
-    snapshot.quizState.currentPrompt === 'meaning' &&
-    requiresReading(currentType)
-  ) {
-    return {
-      completedItem: null,
-      snapshot: {
-        ...snapshot,
-        quizState: {
+    !['correct', 'override-correct', 'continue-incorrect', 'skip'].includes(
+      event.type,
+    )
+  )
+    return { completedItem: null, snapshot };
+  const currentSubjectId = snapshot.quizState.currentSubjectId;
+  const key =
+    snapshot.quizState.currentPrompt === 'meaning'
+      ? 'incorrectMeaningBySubject'
+      : 'incorrectReadingBySubject';
+  const quizState =
+    event.type === 'override-correct'
+      ? {
           ...snapshot.quizState,
-          currentPrompt: 'reading',
-        },
-      },
-    };
-  }
-
+          [key]: {
+            ...snapshot.quizState[key],
+            [currentSubjectId]: Math.max(
+              0,
+              (snapshot.quizState[key][currentSubjectId] ?? 0) - 1,
+            ),
+          },
+        }
+      : snapshot.quizState;
+  const progress =
+    quizState.questionProgress ??
+    (quizState.currentPrompt === 'reading'
+      ? { answeredMeaningSubjectIds: [currentSubjectId] }
+      : {});
+  const next = advanceStudyQuestion({
+    items: snapshot.items,
+    position: snapshot.queuePosition,
+    prompt: quizState.currentPrompt,
+    progress,
+    types: subjectTypes,
+    options,
+    event:
+      event.type === 'continue-incorrect'
+        ? 'retry'
+        : event.type === 'skip'
+          ? 'skip'
+          : 'correct',
+  });
   const completedItem =
-    snapshot.items.find(({ subjectId }) => subjectId === currentSubjectId) ??
-    null;
-  const completedSubjectIds = [
-    ...snapshot.quizState.completedSubjectIds,
-    currentSubjectId,
-  ];
-  const nextIndex = snapshot.items.findIndex(
-    ({ subjectId }) => !completedSubjectIds.includes(subjectId),
-  );
-  const next = nextIndex < 0 ? undefined : snapshot.items[nextIndex];
+    next.completedSubjectId === null
+      ? null
+      : (snapshot.items[snapshot.queuePosition] ?? null);
+  const completedSubjectIds =
+    completedItem === null
+      ? quizState.completedSubjectIds
+      : [...quizState.completedSubjectIds, currentSubjectId];
   return {
     completedItem,
     snapshot: {
       ...snapshot,
-      phase: next === undefined ? 'complete' : 'quiz',
-      queuePosition:
-        next === undefined ? snapshot.items.length : nextIndex,
+      items: next.items,
+      phase: next.prompt === null ? 'complete' : 'quiz',
+      queuePosition: next.position,
       quizState: {
-        ...snapshot.quizState,
+        ...quizState,
+        questionProgress: next.progress,
         completedSubjectIds,
-        currentPrompt: next === undefined ? null : 'meaning',
-        currentSubjectId: next?.subjectId ?? null,
+        currentPrompt: next.prompt,
+        currentSubjectId: next.items[next.position]?.subjectId ?? null,
       },
     },
   };
@@ -131,8 +187,4 @@ function recordIncorrect(
       },
     },
   };
-}
-
-function requiresReading(subjectType: SubjectObject | undefined): boolean {
-  return subjectType === 'kanji' || subjectType === 'vocabulary';
 }

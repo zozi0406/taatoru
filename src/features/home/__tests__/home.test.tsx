@@ -1,9 +1,4 @@
-import {
-  act,
-  fireEvent,
-  screen,
-  waitFor,
-} from '@testing-library/react-native';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
 
 import { renderApp } from '@/test/render';
 import { ThemeProvider } from '@/ui/theme/ThemeProvider';
@@ -16,9 +11,7 @@ const SNAPSHOT: DashboardSnapshot = {
   lessonCount: 0,
   reviewCount: 12,
   nextReviewAt: '2026-07-29T12:00:00.000Z',
-  reviewBuckets: [
-    { hoursFromNow: 0, count: 12, cumulative: 12 },
-  ],
+  reviewBuckets: [{ hoursFromNow: 0, count: 12, cumulative: 12 }],
   currentLevel: {
     radical: { locked: 0, lesson: 1, apprentice: 2, guru: 3 },
     kanji: { locked: 4, lesson: 5, apprentice: 6, guru: 7 },
@@ -118,6 +111,69 @@ test.each([
   expect(await screen.findByText(message)).toBeOnTheScreen();
 });
 
+test('explains hibernation as an account action and clears the notice after a successful retry', async () => {
+  const synchronize = jest
+    .fn()
+    .mockResolvedValueOnce({
+      status: 'failed',
+      error: {
+        kind: 'api',
+        message: 'The user is hibernating',
+        status: 403,
+        safeUrl: null,
+        retryAt: null,
+        hibernating: true,
+      },
+    })
+    .mockResolvedValueOnce({ status: 'completed', updatedResources: 3 });
+  await renderHome({ synchronize });
+  await screen.findByText('12');
+  await act(async () => {
+    fireEvent.press(screen.getByRole('button', { name: 'Quick sync' }));
+  });
+
+  expect(
+    screen.getByText('WaniKani account needs attention'),
+  ).toBeOnTheScreen();
+  expect(screen.getByRole('link', { name: 'Open WaniKani' })).toBeOnTheScreen();
+  expect(screen.queryByText('The user is hibernating')).not.toBeOnTheScreen();
+  expect(screen.queryByText('Synchronization failed')).not.toBeOnTheScreen();
+  expect(screen.getByRole('button', { name: 'Start reviews' })).toBeEnabled();
+
+  await act(async () => {
+    fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+  });
+  expect(
+    screen.queryByText('WaniKani account needs attention'),
+  ).not.toBeOnTheScreen();
+  expect(screen.getByText('Synchronization complete')).toBeOnTheScreen();
+});
+
+test('keeps unrelated permission errors distinct from account hibernation', async () => {
+  await renderHome({
+    synchronize: async () => ({
+      status: 'failed',
+      error: {
+        kind: 'api',
+        message: 'Token lacks permission',
+        status: 403,
+        safeUrl: null,
+        retryAt: null,
+        hibernating: false,
+      },
+    }),
+  });
+  await screen.findByText('12');
+  await act(async () => {
+    fireEvent.press(screen.getByRole('button', { name: 'Quick sync' }));
+  });
+  expect(screen.getByText('Token lacks permission')).toBeOnTheScreen();
+  expect(screen.getByText('Synchronization failed')).toBeOnTheScreen();
+  expect(
+    screen.queryByRole('link', { name: 'Open WaniKani' }),
+  ).not.toBeOnTheScreen();
+});
+
 async function renderHome({
   loadSnapshot = jest.fn(async () => SNAPSHOT),
   synchronize = jest.fn(async () => ({
@@ -126,9 +182,7 @@ async function renderHome({
   })),
 }: {
   readonly loadSnapshot?: () => Promise<DashboardSnapshot>;
-  readonly synchronize?: (
-    mode: 'quick' | 'full',
-  ) => Promise<SyncResult>;
+  readonly synchronize?: (mode: 'quick' | 'full') => Promise<SyncResult>;
 } = {}) {
   return renderApp(
     <ThemeProvider scheme="light">

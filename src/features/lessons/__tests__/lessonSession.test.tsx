@@ -1,11 +1,7 @@
-import {
-  act,
-  fireEvent,
-  screen,
-} from '@testing-library/react-native';
+import { act, fireEvent, screen } from '@testing-library/react-native';
 
 import type { LessonSessionSnapshot } from '@/features/sessions/SessionRepository';
-import { radicalFixture } from '@/fixtures/api';
+import { radicalFixture, kanjiFixture } from '@/fixtures/api';
 import { renderApp } from '@/test/render';
 import { ThemeProvider } from '@/ui/theme/ThemeProvider';
 import { LessonSessionScreen } from '../LessonSessionScreen';
@@ -19,10 +15,9 @@ jest.mock('expo-audio', () => ({
 }));
 
 test('moves from subject presentation to quiz and completes once', async () => {
-  const onCommitTransition = jest.fn<
-    Promise<void>,
-    [LessonTransition]
-  >(async () => undefined);
+  const onCommitTransition = jest.fn<Promise<void>, [LessonTransition]>(
+    async () => undefined,
+  );
   const onFinish = jest.fn(async () => undefined);
   await renderApp(
     <ThemeProvider scheme="light">
@@ -36,19 +31,25 @@ test('moves from subject presentation to quiz and completes once', async () => {
     </ThemeProvider>,
   );
 
-  expect(screen.getByText('The ground stretches from one side to the other.')).toBeVisible();
+  expect(
+    screen.getByText('The ground stretches from one side to the other.'),
+  ).toBeVisible();
   await act(async () => {
-    fireEvent.press(screen.getByRole('button', { name: 'Continue to quiz' }));
+    await fireEvent.press(
+      screen.getByRole('button', { name: 'Continue to quiz' }),
+    );
   });
   expect(screen.getByText('Meaning')).toBeVisible();
 
   await act(async () => {
-    fireEvent.changeText(screen.getByLabelText('Meaning answer'), 'sky');
+    await fireEvent.changeText(screen.getByLabelText('Meaning answer'), 'sky');
   });
   await act(async () => {
-    fireEvent.press(screen.getByRole('button', { name: 'Submit answer' }));
+    await fireEvent.press(
+      screen.getByRole('button', { name: 'Submit answer' }),
+    );
   });
-  expect(await screen.findByText('Try again')).toBeVisible();
+  expect(await screen.findByText('Incorrect')).toBeVisible();
   expect(
     onCommitTransition.mock.calls.some(
       ([transition]) => transition.completedItem !== null,
@@ -56,10 +57,18 @@ test('moves from subject presentation to quiz and completes once', async () => {
   ).toBe(false);
 
   await act(async () => {
-    fireEvent.changeText(screen.getByLabelText('Meaning answer'), 'ground');
+    await fireEvent.press(screen.getByRole('button', { name: 'Continue' }));
   });
   await act(async () => {
-    fireEvent.press(screen.getByRole('button', { name: 'Submit answer' }));
+    await fireEvent.changeText(
+      screen.getByLabelText('Meaning answer'),
+      'ground',
+    );
+  });
+  await act(async () => {
+    await fireEvent.press(
+      screen.getByRole('button', { name: 'Submit answer' }),
+    );
   });
   expect(onCommitTransition).toHaveBeenLastCalledWith(
     expect.objectContaining({
@@ -73,7 +82,9 @@ test('moves from subject presentation to quiz and completes once', async () => {
   expect(await screen.findByText('Lesson complete')).toBeVisible();
 
   await act(async () => {
-    fireEvent.press(screen.getByRole('button', { name: 'Finish lessons' }));
+    await fireEvent.press(
+      screen.getByRole('button', { name: 'Finish lessons' }),
+    );
   });
   expect(onFinish).toHaveBeenCalledTimes(1);
 });
@@ -108,6 +119,47 @@ test('renders a radical image and exposes pronunciation audio', async () => {
   );
 
   expect(screen.getByLabelText('Ground radical image')).toBeVisible();
+});
+
+test('can read forward and back before starting the quiz without completing lessons', async () => {
+  const commit = jest.fn(async (_transition: LessonTransition) => undefined);
+  await renderApp(
+    <ThemeProvider scheme="light">
+      <LessonSessionScreen
+        initialSnapshot={{
+          ...snapshot(),
+          items: [
+            snapshot().items[0]!,
+            { assignmentId: 502, subjectId: kanjiFixture.id },
+          ],
+        }}
+        onCommitTransition={commit}
+        onExit={jest.fn()}
+        onFinish={jest.fn(async () => undefined)}
+        subjects={[radicalFixture, kanjiFixture]}
+      />
+    </ThemeProvider>,
+  );
+  expect(
+    screen.getByRole('button', { name: 'Previous lesson subject' }),
+  ).toBeDisabled();
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Next lesson subject' }),
+  );
+  expect(screen.getByText('Imagine saying ichi.')).toBeVisible();
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Previous lesson subject' }),
+  );
+  expect(
+    screen.getByText('The ground stretches from one side to the other.'),
+  ).toBeVisible();
+  await fireEvent.press(screen.getByRole('button', { name: 'Start quiz' }));
+  expect(screen.getByLabelText('Meaning answer')).toBeVisible();
+  expect(
+    commit.mock.calls.every(
+      ([transition]) => transition.completedItem === null,
+    ),
+  ).toBe(true);
 });
 
 function snapshot(): LessonSessionSnapshot {

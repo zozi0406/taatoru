@@ -1,11 +1,16 @@
+import * as Notifications from 'expo-notifications';
+import { Platform } from 'react-native';
 import {
   NotificationService,
+  ExpoNotificationPlatform,
   type NotificationPlatform,
 } from '../NotificationService';
 
 jest.mock('expo-notifications', () => ({
   AndroidImportance: { DEFAULT: 5 },
   SchedulableTriggerInputTypes: { DATE: 'date' },
+  setNotificationChannelAsync: jest.fn(async () => null),
+  scheduleNotificationAsync: jest.fn(async () => 'scheduled'),
 }));
 
 test('creates the Android channel before requesting permission', async () => {
@@ -87,3 +92,47 @@ function fakePlatform(calls: string[]): NotificationPlatform {
     }),
   };
 }
+
+afterEach(() => {
+  jest.restoreAllMocks();
+  jest.clearAllMocks();
+});
+
+test('uses Android system sound without requesting a custom default sound file', async () => {
+  jest.replaceProperty(Platform, 'OS', 'android');
+  await new ExpoNotificationPlatform().createChannel();
+
+  const channels = jest.mocked(Notifications.setNotificationChannelAsync).mock
+    .calls;
+  expect(channels).toHaveLength(2);
+  expect(channels[0]![0]).toBe('reviews');
+  expect(channels[0]![1]).not.toHaveProperty('sound');
+  expect(channels[1]).toEqual([
+    'reviews-silent',
+    expect.objectContaining({ sound: null }),
+  ]);
+});
+
+test.each([true, false])(
+  'schedules sound=%s explicitly with its matching channel',
+  async (sound) => {
+    await new ExpoNotificationPlatform().schedule({
+      id: 'reviews-hour-0',
+      badge: 5,
+      body: '2 new reviews available',
+      cumulativeCount: 5,
+      newCount: 2,
+      sound,
+      triggerAt: '2026-10-24T15:00:00.000Z',
+    });
+
+    expect(Notifications.scheduleNotificationAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.objectContaining({ sound }),
+        trigger: expect.objectContaining({
+          channelId: sound ? 'reviews' : 'reviews-silent',
+        }),
+      }),
+    );
+  },
+);

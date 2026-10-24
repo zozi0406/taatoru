@@ -7,6 +7,7 @@ import {
   DerivedRepository,
   type SrsCounts,
 } from '@/db/repositories/DerivedRepository';
+import { SUBJECT_WITHIN_GRANTED_LEVEL } from '@/db/subscription';
 
 export interface ReviewForecastBucket {
   readonly hoursFromNow: number;
@@ -115,7 +116,7 @@ export async function getDashboardSnapshot(
          AND a.available_at > ?
          AND a.hidden = 0
          AND s.hidden_at IS NULL
-         AND s.level <= (SELECT max_level_granted FROM user LIMIT 1)
+         AND ${SUBJECT_WITHIN_GRANTED_LEVEL}
          AND ${NOT_EXCLUDED}`,
       [now.toISOString()],
     ),

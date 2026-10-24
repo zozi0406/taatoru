@@ -1,12 +1,14 @@
-import type { SubjectResource } from '@/api/types';
+import type { Resource, SubjectResource, UserData } from '@/api/types';
 import { migrateDatabase } from '@/db/migrate';
 import { NodeTestDatabase } from '@/db/NodeTestDatabase';
+import { ResourceRepository } from '@/db/repositories/ResourceRepository';
 import { StudyMaterialRepository } from '@/db/repositories/StudyMaterialRepository';
 import { SubjectRepository } from '@/db/repositories/SubjectRepository';
 import {
   kanaVocabularyFixture,
   kanjiFixture,
   studyMaterialFixture,
+  userFixture,
   vocabularyFixture,
 } from '@/fixtures/api';
 import { romajiToKana } from '../kana';
@@ -75,9 +77,31 @@ test('returns nothing for empty queries and applies the result cap', async () =>
   }
 });
 
+test('limits search results to max_level_granted', async () => {
+  const db = await searchDatabase();
+  try {
+    const users = new ResourceRepository(db);
+    await users.replaceUser(userWithMaxLevel(3));
+    await expect(searchSubjects(db, 'one', 50)).resolves.toEqual([
+      expect.objectContaining({ id: 201 }),
+      expect.objectContaining({ id: 301 }),
+    ]);
+
+    await users.replaceUser(userWithMaxLevel(60));
+    await expect(searchSubjects(db, 'one', 50)).resolves.toEqual([
+      expect.objectContaining({ id: 201 }),
+      expect.objectContaining({ id: 301 }),
+      expect.objectContaining({ id: 302 }),
+    ]);
+  } finally {
+    await db.close();
+  }
+});
+
 async function searchDatabase(): Promise<NodeTestDatabase> {
   const db = await NodeTestDatabase.open();
   await migrateDatabase(db);
+  await new ResourceRepository(db).replaceUser(userFixture);
   await new SubjectRepository(db).replaceSubjects(
     [
       kanjiFixture,
@@ -124,6 +148,27 @@ function subject(
         { reading, primary: true, accepted_answer: true },
       ],
       slug: characters,
+    },
+  };
+}
+
+function userWithMaxLevel(
+  maxLevelGranted: number,
+): Resource<UserData, 'user'> {
+  const fullAccess = maxLevelGranted === 60;
+  return {
+    ...userFixture,
+    data: {
+      ...userFixture.data,
+      subscription: {
+        ...userFixture.data.subscription,
+        active: fullAccess,
+        max_level_granted: maxLevelGranted,
+        period_ends_at: fullAccess
+          ? userFixture.data.subscription.period_ends_at
+          : null,
+        type: fullAccess ? 'recurring' : 'free',
+      },
     },
   };
 }

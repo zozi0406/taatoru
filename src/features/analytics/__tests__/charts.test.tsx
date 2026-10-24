@@ -48,3 +48,26 @@ test('donut charts expose the same data as a readable legend', async () => {
   expect(screen.getByText('Apprentice: 8')).toBeOnTheScreen();
   expect(screen.getByText('Guru: 4')).toBeOnTheScreen();
 });
+
+test('keeps a full 60-level history within valid chart bounds', async () => {
+  const rendered = await renderApp(
+    <ThemeProvider scheme="light">
+      <SimpleBarChart
+        data={Array.from({ length: 60 }, (_, index) => ({
+          label: `L${index + 1}`,
+          value: index + 1,
+        }))}
+        summary="60 completed levels"
+        title="Level timing in hours"
+      />
+    </ThemeProvider>,
+  );
+
+  const bars = rendered.container.queryAll(({ type }) => type === 'RNSVGRect');
+  expect(bars).toHaveLength(60);
+  for (const bar of bars) {
+    expect(Number(bar.props.width)).toBeGreaterThan(0);
+    expect(Number(bar.props.x)).toBeGreaterThanOrEqual(0);
+    expect(Number(bar.props.x) + Number(bar.props.width)).toBeLessThanOrEqual(320);
+  }
+});

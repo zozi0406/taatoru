@@ -36,14 +36,16 @@ describe('InitialSyncScreen', () => {
       'accessibilityLiveRegion',
       'polite',
     );
+    expect(screen.getByLabelText('Account connected, completed')).toBeTruthy();
     expect(
-      screen.getByLabelText('Account connected, completed'),
+      screen.getByLabelText('Downloading subjects, completed'),
     ).toBeTruthy();
-    expect(screen.getByLabelText('Downloading subjects, completed')).toBeTruthy();
     expect(
       screen.getByLabelText('Syncing your progress, in progress'),
     ).toHaveProp('accessibilityState', { busy: true });
-    expect(screen.getByLabelText('Building offline library, upcoming')).toBeTruthy();
+    expect(
+      screen.getByLabelText('Building offline library, upcoming'),
+    ).toBeTruthy();
   });
 
   it.each([
@@ -87,6 +89,22 @@ describe('InitialSyncScreen', () => {
     expect(onUseDifferentToken).toHaveBeenCalledTimes(1);
   });
 
+  it('offers account recovery instead of a raw hibernation error', async () => {
+    await renderScreen({
+      ...running,
+      status: 'attention',
+      message: 'The user is hibernating',
+    });
+    expect(
+      screen.getByText('WaniKani account needs attention'),
+    ).toBeOnTheScreen();
+    expect(
+      screen.getByRole('link', { name: 'Open WaniKani' }),
+    ).toBeOnTheScreen();
+    expect(screen.queryByText('The user is hibernating')).not.toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Retry now' })).toBeEnabled();
+  });
+
   it('asks before restarting an interrupted setup', async () => {
     const onContinueInterrupted = jest.fn(async () => undefined);
     const onUseAnotherApiKey = jest.fn(async () => undefined);
@@ -101,7 +119,9 @@ describe('InitialSyncScreen', () => {
     );
 
     expect(screen.getByText('Setup was interrupted')).toBeTruthy();
-    expect(screen.getByText(/restart the download from the beginning/i)).toBeTruthy();
+    expect(
+      screen.getByText(/restart the download from the beginning/i),
+    ).toBeTruthy();
 
     await fireEvent.press(
       screen.getByRole('button', { name: 'Continue syncing' }),

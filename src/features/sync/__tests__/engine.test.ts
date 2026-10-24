@@ -20,7 +20,7 @@ import type {
 
 const NOW = new Date('2026-07-29T12:00:00.000Z');
 
-test('runs pending writes and subjects before concurrent phase two resources', async () => {
+test('checks the user grant before incrementally fetching subjects', async () => {
   const events: string[] = [];
   const repository = syncRepository();
   const api = eventApi(events);
@@ -45,19 +45,19 @@ test('runs pending writes and subjects before concurrent phase two resources', a
   expect(events).toEqual([
     'pending-progress:start',
     'pending-study:start',
-    'subjects:start',
+    'user:start',
     'pending-progress:end',
     'pending-study:end',
+    'user:end',
+    'subjects:start',
     'subjects:end',
     'assignments:start',
     'study-materials:start',
-    'user:start',
     'level-progressions:start',
     'voice-actors:start',
     'review-statistics:start',
     'assignments:end',
     'study-materials:end',
-    'user:end',
     'level-progressions:end',
     'voice-actors:end',
     'review-statistics:end',

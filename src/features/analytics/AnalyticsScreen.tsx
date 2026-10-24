@@ -1,26 +1,13 @@
-import {
-  type ReactNode,
-  useCallback,
-  useEffect,
-  useState,
-} from 'react';
-import {
-  FlatList,
-  Pressable,
-  Text,
-  View,
-} from 'react-native';
+import { type ReactNode, useCallback, useEffect, useState } from 'react';
+import { FlatList, Pressable, Text, View } from 'react-native';
 
+import { PageHeading } from '@/ui/components/PageHeading';
+import { srsColors } from '@/ui/theme/colors';
+import { useScreenPadding } from '@/ui/theme/useScreenPadding';
 import { Card } from '@/ui/components/Card';
 import { minimumTouchTarget } from '@/ui/theme/spacing';
-import {
-  type TaatoruTheme,
-  useTheme,
-} from '@/ui/theme/ThemeProvider';
-import type {
-  AnalyticsSnapshot,
-  RankedSubject,
-} from './calculations';
+import { type TaatoruTheme, useTheme } from '@/ui/theme/ThemeProvider';
+import type { AnalyticsSnapshot, RankedSubject } from './calculations';
 import { DonutChart } from './DonutChart';
 import { SimpleBarChart } from './SimpleBarChart';
 
@@ -30,12 +17,7 @@ interface AnalyticsScreenProps {
 }
 
 type AnalyticsSection =
-  | 'upcoming'
-  | 'srs'
-  | 'levels'
-  | 'accuracy'
-  | 'subjects'
-  | 'leeches';
+  'upcoming' | 'srs' | 'levels' | 'accuracy' | 'subjects' | 'leeches';
 
 const SECTIONS: readonly AnalyticsSection[] = [
   'upcoming',
@@ -46,19 +28,14 @@ const SECTIONS: readonly AnalyticsSection[] = [
   'leeches',
 ];
 
-const SRS_COLORS = [
-  '#2563EB',
-  '#7040C8',
-  '#C92F76',
-  '#D97706',
-  '#3F7D58',
-] as const;
+const SRS_COLORS = Object.values(srsColors);
 
 export function AnalyticsScreen({
   loadSnapshot,
   onOpenSubject,
 }: AnalyticsScreenProps) {
   const theme = useTheme();
+  const screenPadding = useScreenPadding();
   const [snapshot, setSnapshot] = useState<AnalyticsSnapshot | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -97,7 +74,7 @@ export function AnalyticsScreen({
       contentInsetAdjustmentBehavior="automatic"
       contentContainerStyle={{
         gap: theme.spacing.lg,
-        padding: theme.spacing.xl,
+        ...screenPadding,
       }}
       data={SECTIONS}
       extraData={{ error, snapshot }}
@@ -107,25 +84,20 @@ export function AnalyticsScreen({
       style={{ backgroundColor: theme.colors.canvas }}
       ListHeaderComponent={
         <View style={{ gap: theme.spacing.sm }}>
-          <Text
-            accessibilityRole="header"
-            selectable
-            style={[
-              theme.typography.screenTitle,
-              { color: theme.colors.text },
-            ]}
-          >
-            Analytics
-          </Text>
-          <Text
-            selectable
-            style={[
-              theme.typography.body,
-              { color: theme.colors.textMuted },
-            ]}
-          >
-            Trends calculated entirely from your local WaniKani library.
-          </Text>
+          <PageHeading
+            title="Analytics"
+            eyebrow="THE BIGGER PICTURE"
+            intro={
+              <Text
+                style={[
+                  theme.typography.body,
+                  { color: theme.colors.textMuted },
+                ]}
+              >
+                Small steps. Measurable progress.
+              </Text>
+            }
+          />
           {error === null ? null : (
             <Text
               accessibilityRole="alert"
@@ -161,7 +133,7 @@ function renderSection(
           summary={
             total === 0
               ? 'No reviews in the next 24 hours'
-              : `${total} reviews across ${snapshot.upcoming.length} time buckets`
+              : `${total} reviews across ${snapshot.upcoming.length} time ${snapshot.upcoming.length === 1 ? 'bucket' : 'buckets'}`
           }
           title="Upcoming reviews"
         />
@@ -274,7 +246,9 @@ function renderSection(
               minHeight: minimumTouchTarget,
             }}
           >
-            <Text style={[theme.typography.label, { color: theme.colors.text }]}>
+            <Text
+              style={[theme.typography.label, { color: theme.colors.text }]}
+            >
               {subject.label} · score {subject.score}
             </Text>
           </Pressable>
@@ -315,7 +289,9 @@ function RankedList({
               minHeight: minimumTouchTarget,
             }}
           >
-            <Text style={[theme.typography.label, { color: theme.colors.text }]}>
+            <Text
+              style={[theme.typography.label, { color: theme.colors.text }]}
+            >
               {subject.label} · {subject.percentage}% · {subject.totalAnswers}{' '}
               answers
             </Text>
@@ -340,10 +316,7 @@ function AnalyticsCard({
       <Text
         accessibilityRole="header"
         selectable
-        style={[
-          theme.typography.sectionTitle,
-          { color: theme.colors.text },
-        ]}
+        style={[theme.typography.sectionTitle, { color: theme.colors.text }]}
       >
         {title}
       </Text>

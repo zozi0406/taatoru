@@ -17,14 +17,14 @@ export function Card({
           backgroundColor: theme.colors.surface,
           borderColor: theme.colors.border,
           borderCurve: 'continuous',
-          borderRadius: 16,
+          borderRadius: 22,
           borderWidth: 1,
           boxShadow:
             theme.scheme === 'dark'
-              ? '0 1px 2px rgba(0, 0, 0, 0.24)'
-              : '0 1px 2px rgba(20, 31, 45, 0.06)',
+              ? '0 4px 16px rgba(0, 0, 0, 0.12)'
+              : '0 4px 18px rgba(44, 29, 74, 0.035)',
           gap: theme.spacing.sm,
-          padding: theme.spacing.lg,
+          padding: 20,
         },
         style,
       ]}

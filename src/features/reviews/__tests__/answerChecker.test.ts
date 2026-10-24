@@ -16,6 +16,25 @@ test('normalizes whitespace, capitalization, and meaning punctuation', () => {
   ).toEqual({ verdict: 'correct', matched: 'One' });
 });
 
+test('keeps long-vowel marks when converting a romaji reading', () => {
+  expect(
+    checkAnswer({
+      answer: 'ko-hi-',
+      prompt: 'reading',
+      subject: {
+        ...answerVocabulary,
+        data: {
+          ...answerVocabulary.data,
+          characters: 'コーヒー',
+          readings: [
+            { reading: 'コーヒー', primary: true, accepted_answer: true },
+          ],
+        },
+      },
+    }),
+  ).toEqual({ verdict: 'correct', matched: 'コーヒー' });
+});
+
 test('accepts auxiliary meanings and user synonyms', () => {
   expect(answer('single', 'meaning')).toEqual({
     verdict: 'correct',
