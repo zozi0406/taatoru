@@ -355,21 +355,15 @@ test('both old and recent reviews include their fixed createdAt', async () => {
 
 test('study-material success removes its marker and failure preserves it', async () => {
   const db = await pendingDatabase([]);
-  await db.run(
-    `INSERT INTO pending_study_materials (
-      subject_id, study_material_id, meaning_note, reading_note,
-      meaning_synonyms_json, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?)`,
-    [201, 601, 'First', null, '["One"]', '2026-07-29T11:00:00.000Z'],
-  );
-  await db.run(
-    `INSERT INTO pending_study_materials (
-      subject_id, study_material_id, meaning_note, reading_note,
-      meaning_synonyms_json, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?)`,
-    [202, null, null, 'Second', '[]', '2026-07-29T11:01:00.000Z'],
-  );
+  await new SubjectRepository(db).replaceSubjects([kanjiFixture, { ...kanjiFixture, id: 202 }], null);
+  await new StudyMaterialRepository(db).replaceStudyMaterials([studyMaterialFixture], null);
+  const writes = new PendingWriteRepository(db);
+  await writes.queueStudyMaterial({ subjectId: 201, meaningNote: 'First', readingNote: null,
+    meaningSynonyms: ['One'], queuedAt: new Date('2026-07-29T11:00:00.000Z') });
+  await writes.queueStudyMaterial({ subjectId: 202, meaningNote: null, readingNote: 'Second',
+    meaningSynonyms: [], queuedAt: new Date('2026-07-29T11:01:00.000Z') });
   const api = writeApi();
+  jest.spyOn(api, 'findStudyMaterial').mockImplementation(async (id) => id === 201 ? studyMaterialFixture : null);
   api.upsertStudyMaterial
     .mockResolvedValueOnce(studyMaterialFixture)
     .mockRejectedValueOnce(new NetworkError('offline'));
@@ -454,15 +448,16 @@ function writeApi() {
     getAssignment: jest.fn(async (id: number) => ({ ...assignmentFixture, id,
       data: { ...assignmentFixture.data, subject_id: id - 300, available_at: '2026-07-29T11:00:00.000Z' } })),
     findReviewStatistic: jest.fn(async () => null),
+    findStudyMaterial: jest.fn(async () => null),
     startAssignment: jest.fn(async () => ({ assignment: assignmentFixture })),
     createReview: jest.fn(async (input: Parameters<WaniKaniApi['createReview']>[0]) => ({ assignment: {
       ...assignmentFixture, id: input.assignmentId ?? 501,
       data: { ...assignmentFixture.data, subject_id: (input.assignmentId ?? 501) - 300 },
     } })),
-    upsertStudyMaterial: jest.fn<
-      Promise<void>,
-      [Parameters<WaniKaniApi['upsertStudyMaterial']>[0]]
-    >(),
+    upsertStudyMaterial: jest.fn(async (input: Parameters<WaniKaniApi['upsertStudyMaterial']>[0]) => ({
+      ...studyMaterialFixture, data: { ...studyMaterialFixture.data, subject_id: input.subjectId,
+        meaning_note: input.meaningNote, reading_note: input.readingNote, meaning_synonyms: input.meaningSynonyms },
+    })),
   } as unknown as WaniKaniApi & {
     startAssignment: jest.MockedFunction<WaniKaniApi['startAssignment']>;
     createReview: jest.MockedFunction<WaniKaniApi['createReview']>;

@@ -20,20 +20,13 @@
 import type { WaniKaniApi } from '@/api/WaniKaniApi';
 import { ApiError } from '@/api/errors';
 import type { Database } from '@/db/Database';
-import type { SelectedPendingWrites, PendingProgressOperation } from './types';
+import type { SelectedPendingWrites, PendingProgressOperation, PendingMaterialOperation } from './types';
 import { WriteReconciler } from './WriteReconciler';
 import { SyncRepository } from './SyncRepository';
 
 type PendingProgressRow = PendingProgressOperation;
 
-interface PendingStudyMaterialRow {
-  readonly subjectId: number;
-  readonly studyMaterialId: number | null;
-  readonly meaningNote: string | null;
-  readonly readingNote: string | null;
-  readonly meaningSynonymsJson: string;
-  readonly createdAt: string;
-}
+type PendingStudyMaterialRow = PendingMaterialOperation;
 
 export class PendingWriteSender {
   constructor(
@@ -56,7 +49,7 @@ export class PendingWriteSender {
       selection.studyMaterialIds,
     );
     for (const material of studyMaterialRows) {
-      await this.sendStudyMaterial(material, signal);
+      await this.sendStudyMaterial(material, now, signal);
     }
   }
 
@@ -125,35 +118,66 @@ export class PendingWriteSender {
 
   private async sendStudyMaterial(
     material: PendingStudyMaterialRow,
+    now: Date,
     signal?: AbortSignal,
   ): Promise<void> {
-    await this.api.upsertStudyMaterial({
-      subjectId: material.subjectId,
-      ...(material.studyMaterialId === null
-        ? {}
-        : { studyMaterialId: material.studyMaterialId }),
-      meaningNote: material.meaningNote,
-      readingNote: material.readingNote,
-      meaningSynonyms: parseSynonyms(material.meaningSynonymsJson),
-      ...(signal === undefined ? {} : { signal }),
+    const reconciler = new WriteReconciler(this.db, this.api);
+    const resolution = await reconciler.reconcileMaterial(material, signal);
+    if (resolution.kind === 'attention') {
+      await this.db.run(`UPDATE pending_study_materials SET delivery_state = 'rejected', last_error_kind = ?, conflict_json = ?
+        WHERE operation_key IS ? AND revision = ?`,
+      [resolution.reason, resolution.conflictJson ?? null, material.operationKey, material.revision]);
+      return;
+    }
+    const repository = new SyncRepository(this.db);
+    if (resolution.satisfied && resolution.remote !== null) {
+      await repository.settleMaterial(material, resolution.remote, now, resolution.matchedRevisions);
+      return;
+    }
+    const payloadJson = JSON.stringify({ ...resolution.fields, subjectId: material.subjectId,
+      ...(resolution.remote === null ? {} : { studyMaterialId: resolution.remote.id }) });
+    const prepared = await this.db.transaction(async (tx) => {
+      const dispatch = await tx.first<{ payload_json: string }>(
+        'SELECT payload_json FROM sync_dispatches WHERE operation_key = ? AND revision = ?', [material.operationKey, material.revision]);
+      const revision = material.revision + (dispatch !== null && dispatch.payload_json !== payloadJson ? 1 : 0);
+      const result = await tx.run(`UPDATE pending_study_materials SET revision = ?, study_material_id = ?, source_json = ?,
+        meaning_note = ?, reading_note = ?, meaning_synonyms_json = ?, delivery_state = 'in_flight', conflict_json = NULL
+        WHERE operation_key = ? AND revision = ?`,
+      [revision, resolution.remote?.id ?? null, JSON.stringify(resolution.remote), resolution.fields.meaningNote,
+        resolution.fields.readingNote, JSON.stringify(resolution.fields.meaningSynonyms), material.operationKey, material.revision]);
+      if (result.changes !== 1) return null;
+      for (const observed of resolution.matchedRevisions)
+        await tx.run('DELETE FROM sync_dispatches WHERE operation_key = ? AND revision = ?', [material.operationKey, observed]);
+      await tx.run(`INSERT OR IGNORE INTO sync_dispatches
+        (operation_key, revision, queue_kind, subject_id, account_epoch, payload_json, source_json, delivery_state, owner_fence)
+        VALUES (?, ?, 'material', ?, ?, ?, ?, 'in_flight', ?)`,
+      [material.operationKey, revision, material.subjectId, material.accountEpoch, payloadJson, JSON.stringify(resolution.remote), this.ownerFence]);
+      return { ...material, revision, payloadJson };
     });
-    await this.db.run(
-      `DELETE FROM pending_study_materials
-       WHERE subject_id = ?
-         AND study_material_id IS ?
-         AND meaning_note IS ?
-         AND reading_note IS ?
-         AND created_at = ?
-         AND meaning_synonyms_json = ?`,
-      [
-        material.subjectId,
-        material.studyMaterialId,
-        material.meaningNote,
-        material.readingNote,
-        material.createdAt,
-        material.meaningSynonymsJson,
-      ],
-    );
+    if (prepared === null) return;
+    try {
+      const receipt = await this.api.upsertStudyMaterial({ ...resolution.fields, subjectId: material.subjectId,
+        ...(resolution.remote === null ? {} : { studyMaterialId: resolution.remote.id }),
+        ...(signal === undefined ? {} : { signal }) });
+      await repository.settleMaterial(prepared, receipt, now);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 422) {
+        const observed = await this.api.findStudyMaterial(material.subjectId, signal);
+        if (observed !== null && JSON.stringify({ meaningNote: observed.data.meaning_note, readingNote: observed.data.reading_note,
+          meaningSynonyms: observed.data.meaning_synonyms }) === JSON.stringify(resolution.fields)) {
+          await repository.settleMaterial(prepared, observed, now);
+          return;
+        }
+      }
+      const rejected = error instanceof ApiError && error.status === 422;
+      const state = rejected ? 'rejected' : error instanceof ApiError && [401, 403, 404, 429].includes(error.status ?? 0) ? 'queued' : 'uncertain';
+      await this.db.run(`UPDATE pending_study_materials SET delivery_state = ?, attempt_count = attempt_count + 1,
+        last_error_kind = ?, next_attempt_at = NULL WHERE operation_key = ? AND revision = ?`,
+      [state, rejected ? 'validation-rejected' : 'delivery-interrupted', material.operationKey, prepared.revision]);
+      await this.db.run('UPDATE sync_dispatches SET delivery_state = ? WHERE operation_key = ? AND revision = ?',
+        [state, material.operationKey, prepared.revision]);
+      if (!rejected) throw error;
+    }
   }
 
   private selectedProgress(
@@ -194,9 +218,12 @@ export class PendingWriteSender {
               meaning_note AS meaningNote,
               reading_note AS readingNote,
               meaning_synonyms_json AS meaningSynonymsJson,
-              created_at AS createdAt
+              created_at AS createdAt, operation_key AS operationKey, revision, account_epoch AS accountEpoch,
+              source_json AS sourceJson, delivery_state AS deliveryState, wire_created_at AS wireCreatedAt,
+              attempt_count AS attemptCount, '{}' AS payloadJson
        FROM pending_study_materials
        WHERE subject_id IN (${placeholders(subjectIds.length)})
+         AND delivery_state != 'rejected'
        ORDER BY created_at, subject_id`,
       subjectIds,
     );
@@ -205,15 +232,4 @@ export class PendingWriteSender {
 
 function placeholders(count: number): string {
   return Array.from({ length: count }, () => '?').join(', ');
-}
-
-function parseSynonyms(value: string): readonly string[] {
-  const decoded: unknown = JSON.parse(value);
-  if (
-    !Array.isArray(decoded) ||
-    !decoded.every((synonym) => typeof synonym === 'string')
-  ) {
-    throw new Error('Invalid pending study-material synonyms');
-  }
-  return decoded;
 }

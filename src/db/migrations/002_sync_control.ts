@@ -33,6 +33,7 @@ export const MIGRATION_2_STATEMENTS: readonly string[] = [
     `ALTER TABLE ${table} ADD COLUMN next_attempt_at TEXT`,
     `ALTER TABLE ${table} ADD COLUMN wire_created_at TEXT`,
     `ALTER TABLE ${table} ADD COLUMN last_error_kind TEXT`,
+    `ALTER TABLE ${table} ADD COLUMN conflict_json TEXT`,
     `UPDATE ${table} SET delivery_state = 'uncertain',
        operation_key = 'legacy-${table}-' || subject_id`,
   ]),

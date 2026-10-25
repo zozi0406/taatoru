@@ -42,7 +42,8 @@ import { StudyMaterialRepository } from '@/db/repositories/StudyMaterialReposito
 import { SubjectRepository } from '@/db/repositories/SubjectRepository';
 import { mergeRecentMistakes } from './recentMistakes';
 import { SyncControlRepository } from './SyncControlRepository';
-import type { RecentMistake, PendingProgressOperation, OperationResolution } from './types';
+import type { RecentMistake, PendingProgressOperation, OperationResolution, PendingMaterialOperation } from './types';
+import type { MaterialReceipt } from '@/api/types';
 import { applyPendingState } from './PendingStateRepository';
 
 export interface SyncCursors {
@@ -187,6 +188,35 @@ export class SyncRepository implements SyncDataRepository {
       await tx.run(`DELETE FROM sync_dispatches WHERE operation_key = ? AND revision = ?`, [operation.operationKey, operation.revision]);
       await tx.run(`INSERT INTO sync_outcomes (account_epoch, operation_key, revision, outcome, reason, occurred_at)
         VALUES (?, ?, ?, ?, ?, ?)`, [operation.accountEpoch, operation.operationKey, operation.revision, resolution.kind, resolution.reason, now.toISOString()]);
+      await tx.run('DELETE FROM sync_outcomes WHERE id NOT IN (SELECT id FROM sync_outcomes ORDER BY id DESC LIMIT 200)');
+      await applyPendingState(tx);
+    });
+  }
+
+  async settleMaterial(operation: PendingMaterialOperation, receipt: MaterialReceipt, now: Date, observed: readonly number[] = []): Promise<void> {
+    if (receipt.data.subject_id !== operation.subjectId || receipt.id <= 0) throw new Error('Invalid material receipt');
+    await this.db.transaction(async (tx) => {
+      await tx.run('DELETE FROM pending_study_materials WHERE operation_key = ? AND revision = ?', [operation.operationKey, operation.revision]);
+      // A successful older revision establishes identity/baseline, never newer desired values.
+      await tx.run(`UPDATE pending_study_materials SET study_material_id = ?, source_json = ?
+        WHERE operation_key = ? AND revision > ?`, [receipt.id, JSON.stringify(receipt), operation.operationKey, operation.revision]);
+      const repository = new SyncRepository(new TransactionDatabase(tx));
+      const cursors = (await repository.getStateSnapshot()).cursors;
+      await repository.replaceStudyMaterials([receipt], cursors.studyMaterials);
+      for (const revision of observed) await tx.run('DELETE FROM sync_dispatches WHERE operation_key = ? AND revision = ?',
+        [operation.operationKey, revision]);
+      const unresolved = await tx.first(`SELECT revision FROM sync_dispatches WHERE operation_key = ? AND revision < ? LIMIT 1`,
+        [operation.operationKey, operation.revision]);
+      if (unresolved === null) {
+        await tx.run('DELETE FROM sync_dispatches WHERE operation_key = ? AND revision = ?', [operation.operationKey, operation.revision]);
+      } else {
+        // Keep the newer values recoverable if an expired owner's PUT arrives late.
+        await tx.run("UPDATE sync_dispatches SET delivery_state = 'acknowledged' WHERE operation_key = ? AND revision = ?",
+          [operation.operationKey, operation.revision]);
+      }
+      await tx.run(`INSERT INTO sync_outcomes (account_epoch, operation_key, revision, outcome, reason, occurred_at)
+        VALUES (?, ?, ?, 'acknowledged', 'material-receipt-or-observed-values', ?)`,
+      [operation.accountEpoch, operation.operationKey, operation.revision, now.toISOString()]);
       await tx.run('DELETE FROM sync_outcomes WHERE id NOT IN (SELECT id FROM sync_outcomes ORDER BY id DESC LIMIT 200)');
       await applyPendingState(tx);
     });

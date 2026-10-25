@@ -1,8 +1,8 @@
 import { ApiError } from '@/api/errors';
 import type { WaniKaniApi } from '@/api/WaniKaniApi';
-import type { AssignmentData, IdentifiedResource, ReviewStatisticData } from '@/api/types';
+import type { AssignmentData, IdentifiedResource, ReviewStatisticData, MaterialReceipt } from '@/api/types';
 import type { Database } from '@/db/Database';
-import type { OperationResolution, PendingProgressOperation } from './types';
+import type { OperationResolution, PendingProgressOperation, PendingMaterialOperation, MaterialFields, MaterialResolution } from './types';
 
 interface ProgressSource {
   readonly assignment: IdentifiedResource<AssignmentData, 'assignment'>;
@@ -13,6 +13,47 @@ interface ProgressSource {
 /** Establish an opportunity from server state; transport success is not inferred. */
 export class WriteReconciler {
   constructor(private readonly db: Database, private readonly api: WaniKaniApi) {}
+
+  async reconcileMaterial(operation: PendingMaterialOperation, signal?: AbortSignal): Promise<MaterialResolution> {
+    if (operation.sourceJson === null || operation.operationKey === null)
+      return { kind: 'attention', reason: 'unknown-baseline' };
+    let baseline: MaterialReceipt | null;
+    let local: MaterialFields;
+    try {
+      baseline = JSON.parse(operation.sourceJson) as MaterialReceipt | null;
+      local = { meaningNote: operation.meaningNote, readingNote: operation.readingNote,
+        meaningSynonyms: JSON.parse(operation.meaningSynonymsJson) as string[] };
+      if (!Array.isArray(local.meaningSynonyms) || !local.meaningSynonyms.every((value) => typeof value === 'string') ||
+          (baseline !== null && baseline.data?.subject_id !== operation.subjectId)) throw new Error();
+    } catch { return { kind: 'attention', reason: 'invalid-material' }; }
+    // A failed lookup propagates. Only an authoritative empty lookup permits POST.
+    const remote = await this.api.findStudyMaterial(operation.subjectId, signal);
+    if (remote !== null && remote.data.subject_id !== operation.subjectId)
+      return { kind: 'attention', reason: 'material-identity-changed' };
+    const dispatches = await this.db.all<{ revision: number; payload_json: string }>(
+      `SELECT revision, payload_json FROM sync_dispatches WHERE operation_key = ? AND queue_kind = 'material' ORDER BY revision`,
+      [operation.operationKey],
+    );
+    const matchedRevisions = dispatches.filter((dispatch) => {
+      try { return remote !== null && sameFields(JSON.parse(dispatch.payload_json) as MaterialFields, materialFields(remote)); }
+      catch { return false; }
+    }).map((dispatch) => dispatch.revision);
+    // An older dispatched edit may be our own write, not an external conflict.
+    if (matchedRevisions.some((revision) => revision < operation.revision)) baseline = remote;
+    const original = materialFields(baseline);
+    const current = materialFields(remote);
+    const merged: Record<string, unknown> = {};
+    const conflicts: string[] = [];
+    for (const field of ['meaningNote', 'readingNote', 'meaningSynonyms'] as const) {
+      if (equal(local[field], current[field]) || equal(local[field], original[field])) merged[field] = current[field];
+      else if (equal(current[field], original[field])) merged[field] = local[field];
+      else conflicts.push(field);
+    }
+    if (conflicts.length !== 0) return { kind: 'attention', reason: 'material-conflict',
+      conflictJson: JSON.stringify({ baseline, local, remote, dispatches, fields: conflicts }) };
+    const fields = merged as unknown as MaterialFields;
+    return { kind: 'ready', fields, remote, matchedRevisions, satisfied: remote !== null && sameFields(fields, current) };
+  }
 
   async reconcileProgress(operation: PendingProgressOperation, now: Date, signal?: AbortSignal): Promise<OperationResolution> {
     const attention = (reason: string): OperationResolution => ({ kind: 'attention', reason });
@@ -67,6 +108,17 @@ export class WriteReconciler {
     return { kind: 'retry', wireCreatedAt: wire };
   }
 }
+
+export function materialFields(resource: MaterialReceipt | null): MaterialFields {
+  return { meaningNote: resource?.data.meaning_note ?? null, readingNote: resource?.data.reading_note ?? null,
+    meaningSynonyms: resource?.data.meaning_synonyms ?? [] };
+}
+
+export function sameFields(a: MaterialFields, b: MaterialFields): boolean {
+  return equal(a.meaningNote, b.meaningNote) && equal(a.readingNote, b.readingNote) && equal(a.meaningSynonyms, b.meaningSynonyms);
+}
+
+function equal(a: unknown, b: unknown): boolean { return JSON.stringify(a) === JSON.stringify(b); }
 
 function counterTotal(data: ReviewStatisticData): number {
   return data.meaning_correct + data.meaning_incorrect + data.reading_correct + data.reading_incorrect;

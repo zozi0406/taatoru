@@ -76,6 +76,24 @@ export interface PendingProgressOperation extends PendingOperation {
   readonly incorrectReadingAnswers: number;
 }
 
+export interface PendingMaterialOperation extends PendingOperation {
+  readonly studyMaterialId: number | null;
+  readonly meaningNote: string | null;
+  readonly readingNote: string | null;
+  readonly meaningSynonymsJson: string;
+}
+
+export interface MaterialFields {
+  readonly meaningNote: string | null;
+  readonly readingNote: string | null;
+  readonly meaningSynonyms: readonly string[];
+}
+
+export type MaterialResolution =
+  | { readonly kind: 'attention'; readonly reason: string; readonly conflictJson?: string }
+  | { readonly kind: 'ready'; readonly fields: MaterialFields; readonly remote: import('@/api/types').MaterialReceipt | null;
+      readonly matchedRevisions: readonly number[]; readonly satisfied: boolean };
+
 export type OperationResolution =
   | { readonly kind: 'acknowledged' | 'superseded'; readonly receipt: import('@/api/types').ProgressReceipt; readonly reason: string }
   | { readonly kind: 'retry'; readonly wireCreatedAt: string }
