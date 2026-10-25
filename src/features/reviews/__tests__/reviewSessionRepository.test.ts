@@ -214,7 +214,7 @@ test('commits a completed review and next snapshot in one transaction', async ()
       NOW,
     );
 
-    await expect(rowCount(db, 'assignments')).resolves.toBe(0);
+    await expect(rowCount(db, 'assignments')).resolves.toBe(1);
     await expect(rowCount(db, 'pending_progress')).resolves.toBe(1);
     await expect(repository.loadReviewSession()).resolves.toEqual(next);
   } finally {

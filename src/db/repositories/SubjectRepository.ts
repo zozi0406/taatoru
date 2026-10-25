@@ -4,6 +4,7 @@ import type {
   SubjectObject,
 } from '@/api/types';
 import type { Database } from '../Database';
+import { applyPendingState } from '@/features/sync/PendingStateRepository';
 
 export class SubjectRepository {
   constructor(private readonly db: Database) {}
@@ -92,6 +93,7 @@ export class SubjectRepository {
           }
         }
       }
+      await applyPendingState(tx);
       await tx.run(
         'UPDATE sync_state SET subjects_updated_at = ? WHERE id = 1',
         [cursor],

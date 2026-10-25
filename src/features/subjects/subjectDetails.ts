@@ -94,8 +94,9 @@ export async function loadSubjectDetails(
 ): Promise<SubjectDetailsSnapshot> {
   const row = await db.first<DetailsRow>(
     `SELECT s.resource_json AS resourceJson,
-            a.srs_stage AS srsStage,
-            a.available_at AS availableAt,
+            COALESCE(sp.srs_stage, a.srs_stage) AS srsStage,
+            CASE WHEN EXISTS(SELECT 1 FROM pending_progress p WHERE p.subject_id = s.id)
+              THEN NULL ELSE a.available_at END AS availableAt,
             a.burned_at AS burnedAt,
             a.passed_at AS passedAt,
             a.started_at AS startedAt,
@@ -111,6 +112,7 @@ export async function loadSubjectDetails(
      FROM subjects s
      LEFT JOIN assignments a
        ON a.subject_id = s.id AND a.hidden = 0
+     LEFT JOIN subject_progress sp ON sp.subject_id = s.id
      LEFT JOIN review_statistics rs
        ON rs.subject_id = s.id AND rs.hidden = 0
      LEFT JOIN study_materials sm

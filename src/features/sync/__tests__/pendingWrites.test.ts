@@ -85,7 +85,7 @@ test('queues a review and updates local state in one transaction', async () => {
       await db.first('SELECT id FROM assignments WHERE id = ?', [
         assignmentFixture.id,
       ]),
-    ).toBeNull();
+    ).toEqual({ id: assignmentFixture.id });
     expect(
       await db.first(
         `SELECT srs_stage AS srsStage, last_mistake_at AS lastMistakeAt

@@ -19,6 +19,7 @@
 import type { Database, DatabaseTransaction } from '@/db/Database';
 import { projectSrsStage } from './projection';
 import { SyncControlRepository } from './SyncControlRepository';
+import { applyPendingState } from './PendingStateRepository';
 import type { ProgressOperationKind } from './types';
 
 export interface LessonCompletion {
@@ -275,12 +276,8 @@ export class PendingWriteRepository {
         ],
       );
       await tx.run(
-        'DELETE FROM assignments WHERE id = ? AND subject_id = ?',
-        [completion.assignmentId, completion.subjectId],
-      );
-      await tx.run(
         `UPDATE subject_progress
-         SET srs_stage = ?, last_mistake_at = ?
+         SET srs_stage = ?, last_mistake_at = COALESCE(?, last_mistake_at)
          WHERE subject_id = ?`,
         [
           projection.srsStage,
@@ -298,6 +295,7 @@ export class PendingWriteRepository {
           [completion.subjectId, projection.lastMistakeAt],
         );
       }
+      await applyPendingState(tx);
     })();
   }
 }

@@ -37,6 +37,9 @@ export const MIGRATION_2_STATEMENTS: readonly string[] = [
        operation_key = 'legacy-${table}-' || subject_id`,
   ]),
   'ALTER TABLE pending_study_materials ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0',
+  `UPDATE pending_progress SET projection_json = (
+    SELECT json_object('srsStage', sp.srs_stage, 'lastMistakeAt', sp.last_mistake_at)
+    FROM subject_progress sp WHERE sp.subject_id = pending_progress.subject_id)`,
   `CREATE TABLE sync_dispatches (
     operation_key TEXT NOT NULL,
     revision INTEGER NOT NULL,

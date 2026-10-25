@@ -131,10 +131,11 @@ export async function getDashboardSnapshot(
   const level = Math.min(user.level, user.maxLevelGranted);
   const levelRows = await db.all<LevelRow>(
     `SELECT s.object AS subjectType,
-            a.srs_stage AS srsStage,
+            COALESCE(sp.srs_stage, a.srs_stage) AS srsStage,
             a.started_at AS startedAt
      FROM subjects s
      LEFT JOIN assignments a ON a.subject_id = s.id
+     LEFT JOIN subject_progress sp ON sp.subject_id = s.id
      WHERE s.level = ? AND s.hidden_at IS NULL
      ORDER BY s.lesson_position, s.id`,
     [level],

@@ -1,6 +1,7 @@
 import type { AssignmentData, IdentifiedResource } from '@/api/types';
 import type { Database } from '../Database';
 import { SUBJECT_WITHIN_GRANTED_LEVEL } from '../subscription';
+import { applyPendingState, NO_ACTIVE_PENDING_PROGRESS } from '@/features/sync/PendingStateRepository';
 
 export interface AvailableAssignment {
   readonly assignmentId: number;
@@ -93,6 +94,7 @@ export class AssignmentRepository {
           );
         }
       }
+      await applyPendingState(tx);
       await tx.run(
         'UPDATE sync_state SET assignments_updated_at = ? WHERE id = 1',
         [cursor],
@@ -130,4 +132,4 @@ export const NOT_EXCLUDED = `NOT EXISTS (
   SELECT 1 FROM study_materials sm
   WHERE sm.subject_id = a.subject_id
     AND instr(COALESCE(sm.meaning_note, ''), '#tsurukameExclude') > 0
-)`;
+) AND ${NO_ACTIVE_PENDING_PROGRESS}`;
