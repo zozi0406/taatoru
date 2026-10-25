@@ -223,6 +223,8 @@ export class SyncRepository implements SyncDataRepository {
       await repository.replaceStudyMaterials([receipt], cursors.studyMaterials);
       for (const revision of observed) await tx.run('DELETE FROM sync_dispatches WHERE operation_key = ? AND revision = ?',
         [operation.operationKey, revision]);
+      await tx.run(`DELETE FROM sync_dispatches WHERE operation_key = ? AND revision < ? AND delivery_state IN ('queued', 'rejected')`,
+        [operation.operationKey, operation.revision]);
       const unresolved = await tx.first(`SELECT revision FROM sync_dispatches WHERE operation_key = ? AND revision < ? LIMIT 1`,
         [operation.operationKey, operation.revision]);
       if (unresolved === null) {

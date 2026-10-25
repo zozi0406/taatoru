@@ -6,6 +6,15 @@ import { migrateDatabase } from '@/db/migrate';
 import { NodeTestDatabase } from '@/db/NodeTestDatabase';
 import { SyncControlRepository } from '../SyncControlRepository';
 
+test('migration retries contention during WAL setup as well as inside the transaction', async () => {
+  const db = await NodeTestDatabase.open();
+  try {
+    jest.spyOn(db, 'first').mockRejectedValueOnce(new Error('database is locked'));
+    await migrateDatabase(db);
+    expect(await db.first('PRAGMA user_version')).toEqual({ user_version: 2 });
+  } finally { await db.close(); }
+});
+
 test('independent connections cannot own the same account concurrently', async () => {
   const folder = mkdtempSync(join(tmpdir(), 'taatoru-owner-'));
   const first = await NodeTestDatabase.open(join(folder, 'cache.db'));

@@ -1,4 +1,4 @@
-import { NetworkError } from '@/api/errors';
+import { ApiError, NetworkError } from '@/api/errors';
 import { studyMaterialFixture } from '@/fixtures/api';
 import { FixtureSyncApi, SYNC_NOW, syncDatabase } from '@/test/sync/fixtures';
 import { PendingWriteRepository } from '../PendingWriteRepository';
@@ -142,4 +142,18 @@ test('a late old PUT cannot erase evidence of the newer acknowledged desired val
       "SELECT payload_json FROM sync_dispatches WHERE delivery_state = 'acknowledged'");
     expect(JSON.parse(evidence!.payload_json).meaningNote).toBe('newer');
   } finally { release?.(); await db.close(); }
+});
+
+test('a definitively rejected older revision does not leave false unresolved upload history', async () => {
+  const db = await syncDatabase(); const api = new FixtureSyncApi(); const writes = new PendingWriteRepository(db);
+  try {
+    await writes.queueStudyMaterial(edit('invalid first'));
+    const accept = api.upsertStudyMaterial.bind(api);
+    api.upsertStudyMaterial = async () => { throw new ApiError('validation', { status: 422 }); };
+    await new PendingWriteSender(db, api).sendSelectedPendingWrites(selection, SYNC_NOW);
+    await writes.queueStudyMaterial(edit('corrected'));
+    api.upsertStudyMaterial = accept;
+    await new PendingWriteSender(db, api).sendSelectedPendingWrites(selection, SYNC_NOW);
+    expect(await db.first('SELECT COUNT(*) AS n FROM sync_dispatches')).toEqual({ n: 0 });
+  } finally { await db.close(); }
 });

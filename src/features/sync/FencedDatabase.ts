@@ -30,6 +30,8 @@ export class AccountDatabase implements Database {
 
   transaction<T>(operation: (tx: DatabaseTransaction) => Promise<T>): Promise<T> {
     return this.db.transaction(async (tx) => {
+      // Freeze local commits while replacement identity/pending-work checks run.
+      await this.control.assertLocalWrite(tx, this.context);
       await this.assertCurrent(tx);
       const result = await operation(tx);
       await this.assertCurrent(tx);

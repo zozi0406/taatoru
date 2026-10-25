@@ -64,3 +64,14 @@ test('an old screen cannot enqueue edits or read replacement account data', asyn
     expect(await db.first('SELECT COUNT(*) AS n FROM pending_study_materials')).toEqual({ n: 0 });
   } finally { await db.close(); }
 });
+
+test('account transition freezes local writes before the pending-work check and replacement', async () => {
+  const db = await syncDatabase(); const control = new SyncControlRepository(db);
+  try {
+    const context = await control.activateCredentials(await control.beginCredentialTransition(), 'account-a', true);
+    const screen = new AccountDatabase(db, context);
+    await control.beginCredentialTransition();
+    await expect(screen.run("INSERT INTO settings VALUES ('late-transition-write', 'fixture')")).rejects.toThrow('ownership');
+    expect(await db.first("SELECT key FROM settings WHERE key = 'late-transition-write'")).toBeNull();
+  } finally { await db.close(); }
+});

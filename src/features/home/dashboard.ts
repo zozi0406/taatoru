@@ -8,6 +8,7 @@ import {
   type SrsCounts,
 } from '@/db/repositories/DerivedRepository';
 import { SUBJECT_WITHIN_GRANTED_LEVEL } from '@/db/subscription';
+import { SyncRepository } from '@/features/sync/SyncRepository';
 
 export interface ReviewForecastBucket {
   readonly hoursFromNow: number;
@@ -58,10 +59,6 @@ interface DashboardUserRow {
   readonly resourceJson: string;
 }
 
-interface PendingRow {
-  readonly count: number;
-}
-
 interface NextReviewRow {
   readonly nextReviewAt: string | null;
 }
@@ -103,11 +100,7 @@ export async function getDashboardSnapshot(
     derived.getAvailableReviews(now),
     derived.getUpcomingReviews(now, 24),
     derived.getSrsCounts(),
-    db.first<PendingRow>(
-      `SELECT
-        (SELECT COUNT(*) FROM pending_progress) +
-        (SELECT COUNT(*) FROM pending_study_materials) AS count`,
-    ),
+    new SyncRepository(db, () => now).getQueueSummary(),
     db.first<NextReviewRow>(
       `SELECT MIN(a.available_at) AS nextReviewAt
        FROM assignments a
@@ -168,7 +161,7 @@ export async function getDashboardSnapshot(
     reviewBuckets,
     currentLevel,
     srs,
-    pendingWriteCount: pending?.count ?? 0,
+    pendingWriteCount: pending.pending,
     vacationActive: vacationActive(user.resourceJson),
     online,
     lastSyncAt: sync?.lastSyncAt ?? null,

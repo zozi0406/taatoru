@@ -161,6 +161,12 @@ export class SyncControlRepository {
       throw new StaleSyncError();
   }
 
+  async assertLocalWrite(tx: DatabaseTransaction, context: AccountContext): Promise<void> {
+    const row = await this.read(tx);
+    if (row.user_id !== context.userId || row.account_epoch !== context.accountEpoch ||
+        (row.auth_state !== 'active' && row.auth_state !== 'legacy')) throw new StaleSyncError();
+  }
+
   async assertLease(tx: DatabaseTransaction, lease: SyncLease, now: number): Promise<void> {
     const row = await this.read(tx);
     this.checkContext(row, lease.context);
