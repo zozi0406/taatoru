@@ -9,6 +9,10 @@ import type {
   SubjectObject,
   UserData,
   VoiceActorData,
+  IdentifiedResource,
+  ResetData,
+  ProgressReceipt,
+  MaterialReceipt,
 } from './types';
 
 export interface RateLimitSnapshot {
@@ -55,6 +59,10 @@ export interface StudyMaterialInput {
 
 export interface WaniKaniApi {
   getUser(signal?: AbortSignal): Promise<Resource<UserData, 'user'>>;
+  getAssignment(id: number, signal?: AbortSignal): Promise<IdentifiedResource<AssignmentData, 'assignment'>>;
+  getResets(updatedAfter: string | null, signal?: AbortSignal): Promise<CollectionPage<ResetData, 'reset'>>;
+  findStudyMaterial(subjectId: number, signal?: AbortSignal): Promise<MaterialReceipt | null>;
+  findReviewStatistic(subjectId: number, signal?: AbortSignal): Promise<IdentifiedResource<ReviewStatisticData, 'review_statistic'> | null>;
   getSubjects(
     updatedAfter: string | null,
     signal?: AbortSignal,
@@ -78,8 +86,8 @@ export interface WaniKaniApi {
     updatedAfter: string | null,
     signal?: AbortSignal,
   ): Promise<CollectionPage<ReviewStatisticData, 'review_statistic'>>;
-  startAssignment(input: StartAssignmentInput): Promise<void>;
-  createReview(input: CreateReviewInput): Promise<void>;
-  upsertStudyMaterial(input: StudyMaterialInput): Promise<void>;
+  startAssignment(input: StartAssignmentInput): Promise<ProgressReceipt>;
+  createReview(input: CreateReviewInput): Promise<ProgressReceipt>;
+  upsertStudyMaterial(input: StudyMaterialInput): Promise<MaterialReceipt>;
   readonly rateLimit: RateLimitSnapshot;
 }

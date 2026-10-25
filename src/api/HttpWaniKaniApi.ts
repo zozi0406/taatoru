@@ -24,8 +24,9 @@ import type {
   WaniKaniApi,
 } from './WaniKaniApi';
 import { ApiDecodeError, ApiError, NetworkError } from './errors';
-import { fetchAllPages, fetchSpeculativePages } from './pagination';
+import { fetchAllPages } from './pagination';
 import { RateLimitTracker } from './rateLimit';
+import { compareWaniKaniDates, parseWaniKaniDate, replayCursor } from './date';
 import type {
   AssignmentData,
   CollectionPage,
@@ -38,6 +39,10 @@ import type {
   UserData,
   VoiceActorData,
   WaniKaniObject,
+  IdentifiedResource,
+  ResetData,
+  ProgressReceipt,
+  MaterialReceipt,
 } from './types';
 
 const DEFAULT_BASE_URL = 'https://api.wanikani.com/v2/';
@@ -97,29 +102,11 @@ export class HttpWaniKaniApi implements WaniKaniApi {
     signal?: AbortSignal,
   ): Promise<CollectionPage<SubjectData, SubjectObject>> {
     const url = this.collectionUrl('subjects', {
-      hidden: 'false',
-      updated_after: updatedAfter,
+      updated_after: replayCursor(updatedAfter),
     });
-    const fetchPage = (pageUrl: string, pageSignal?: AbortSignal) =>
-      this.requestCollectionPage<SubjectData, SubjectObject>(
-        pageUrl,
-        (object): object is SubjectObject =>
-          SUBJECT_OBJECTS.has(object as SubjectObject),
-        pageSignal,
-      );
-
-    return preserveUpdatedAfter(
-      updatedAfter === null
-        ? fetchSpeculativePages({
-            url,
-            windows: 9,
-            perPage: 1000,
-            fetchPage,
-            signal,
-          })
-        : fetchAllPages(url, fetchPage, signal),
-      updatedAfter,
-    );
+    return preserveUpdatedAfter(this.fetchCollection<SubjectData, SubjectObject>(
+      url, (object): object is SubjectObject => SUBJECT_OBJECTS.has(object as SubjectObject), signal,
+    ), updatedAfter);
   }
 
   getAssignments(
@@ -127,9 +114,7 @@ export class HttpWaniKaniApi implements WaniKaniApi {
     signal?: AbortSignal,
   ): Promise<CollectionPage<AssignmentData, 'assignment'>> {
     const url = this.collectionUrl('assignments', {
-      unlocked: 'true',
-      hidden: 'false',
-      updated_after: updatedAfter,
+      updated_after: replayCursor(updatedAfter),
     });
     return preserveUpdatedAfter(
       this.fetchCollection(
@@ -146,7 +131,7 @@ export class HttpWaniKaniApi implements WaniKaniApi {
     signal?: AbortSignal,
   ): Promise<CollectionPage<StudyMaterialData, 'study_material'>> {
     const url = this.collectionUrl('study_materials', {
-      updated_after: updatedAfter,
+      updated_after: replayCursor(updatedAfter),
     });
     return preserveUpdatedAfter(
       this.fetchCollection(
@@ -174,7 +159,7 @@ export class HttpWaniKaniApi implements WaniKaniApi {
     signal?: AbortSignal,
   ): Promise<CollectionPage<VoiceActorData, 'voice_actor'>> {
     const url = this.collectionUrl('voice_actors', {
-      updated_after: updatedAfter,
+      updated_after: replayCursor(updatedAfter),
     });
     return preserveUpdatedAfter(
       this.fetchCollection(
@@ -191,44 +176,65 @@ export class HttpWaniKaniApi implements WaniKaniApi {
     signal?: AbortSignal,
   ): Promise<CollectionPage<ReviewStatisticData, 'review_statistic'>> {
     const url = this.collectionUrl('review_statistics', {
-      hidden: 'false',
-      updated_after: updatedAfter,
+      updated_after: replayCursor(updatedAfter),
     });
-    const fetchPage = (pageUrl: string, pageSignal?: AbortSignal) =>
-      this.requestCollectionPage<ReviewStatisticData, 'review_statistic'>(
-        pageUrl,
-        (object): object is 'review_statistic' =>
-          object === 'review_statistic',
-        pageSignal,
-      );
-
-    return preserveUpdatedAfter(
-      updatedAfter === null
-        ? fetchSpeculativePages({
-            url,
-            windows: 9,
-            perPage: 1000,
-            fetchPage,
-            signal,
-          })
-        : fetchAllPages(url, fetchPage, signal),
-      updatedAfter,
-    );
+    return preserveUpdatedAfter(this.fetchCollection<ReviewStatisticData, 'review_statistic'>(
+      url, (object): object is 'review_statistic' => object === 'review_statistic', signal,
+    ), updatedAfter);
   }
 
-  async startAssignment(input: StartAssignmentInput): Promise<void> {
+  async getAssignment(id: number, signal?: AbortSignal): Promise<IdentifiedResource<AssignmentData, 'assignment'>> {
+    const url = this.url(`assignments/${id}`);
+    const response = await this.requestJson(url, { signal });
+    const resource = decodeIdentified<AssignmentData, 'assignment'>(response.body, 'assignment', url, response.status);
+    if (resource.id !== id) throw new ApiDecodeError('Assignment identity mismatch', { url });
+    return resource;
+  }
+
+  getResets(updatedAfter: string | null, signal?: AbortSignal): Promise<CollectionPage<ResetData, 'reset'>> {
+    return preserveUpdatedAfter(this.fetchCollection<ResetData, 'reset'>(
+      this.collectionUrl('resets', { updated_after: replayCursor(updatedAfter) }),
+      (object): object is 'reset' => object === 'reset', signal,
+    ), updatedAfter);
+  }
+
+  async findStudyMaterial(subjectId: number, signal?: AbortSignal): Promise<MaterialReceipt | null> {
+    const page = await this.fetchCollection<StudyMaterialData, 'study_material'>(
+      this.collectionUrl('study_materials', { subject_ids: String(subjectId) }),
+      (object): object is 'study_material' => object === 'study_material', signal,
+    );
+    if (page.data.some((resource) => resource.data.subject_id !== subjectId) || page.data.length > 1)
+      throw new ApiDecodeError('Study material identity mismatch');
+    return page.data[0] ?? null;
+  }
+
+  async findReviewStatistic(subjectId: number, signal?: AbortSignal): Promise<IdentifiedResource<ReviewStatisticData, 'review_statistic'> | null> {
+    const page = await this.fetchCollection<ReviewStatisticData, 'review_statistic'>(
+      this.collectionUrl('review_statistics', { subject_ids: String(subjectId) }),
+      (object): object is 'review_statistic' => object === 'review_statistic', signal,
+    );
+    if (page.data.some((resource) => resource.data.subject_id !== subjectId) || page.data.length > 1)
+      throw new ApiDecodeError('Review statistic identity mismatch');
+    return page.data[0] ?? null;
+  }
+
+  async startAssignment(input: StartAssignmentInput): Promise<ProgressReceipt> {
     const body = input.startedAt
       ? { started_at: input.startedAt.toISOString() }
       : {};
-    await this.requestWrite(
+    const response = await this.requestWrite(
       this.url(`assignments/${input.assignmentId}/start`),
       'PUT',
       body,
       input.signal,
     );
+    const assignment = decodeIdentified<AssignmentData, 'assignment'>(response.body,
+      'assignment', this.url(`assignments/${input.assignmentId}/start`), response.status);
+    if (assignment.id !== input.assignmentId) throw new ApiDecodeError('Assignment identity mismatch');
+    return { assignment };
   }
 
-  async createReview(input: CreateReviewInput): Promise<void> {
+  async createReview(input: CreateReviewInput): Promise<ProgressReceipt> {
     const review = {
       ...(input.assignmentId === undefined
         ? { subject_id: input.subjectId }
@@ -240,15 +246,27 @@ export class HttpWaniKaniApi implements WaniKaniApi {
         : { created_at: input.createdAt.toISOString() }),
     };
 
-    await this.requestWrite(
+    const response = await this.requestWrite(
       this.url('reviews'),
       'POST',
       { review },
       input.signal,
     );
+    const body = response.body;
+    if (!isRecord(body) || body.object !== 'review' || !isRecord(body.resources_updated))
+      throw new ApiDecodeError('Invalid review receipt', { url: this.url('reviews'), status: response.status });
+    const assignment = decodeIdentified<AssignmentData, 'assignment'>(body.resources_updated.assignment,
+      'assignment', this.url('reviews'), response.status);
+    const reviewStatistic = decodeIdentified<ReviewStatisticData, 'review_statistic'>(body.resources_updated.review_statistic,
+      'review_statistic', this.url('reviews'), response.status);
+    if ((input.assignmentId !== undefined && assignment.id !== input.assignmentId) ||
+        (input.subjectId !== undefined && assignment.data.subject_id !== input.subjectId) ||
+        reviewStatistic.data.subject_id !== assignment.data.subject_id)
+      throw new ApiDecodeError('Review receipt identity mismatch');
+    return { assignment, reviewStatistic };
   }
 
-  async upsertStudyMaterial(input: StudyMaterialInput): Promise<void> {
+  async upsertStudyMaterial(input: StudyMaterialInput): Promise<MaterialReceipt> {
     const creating = input.studyMaterialId === undefined;
     const studyMaterial = {
       ...(creating ? { subject_id: input.subjectId } : {}),
@@ -257,7 +275,7 @@ export class HttpWaniKaniApi implements WaniKaniApi {
       meaning_synonyms: input.meaningSynonyms,
     };
 
-    await this.requestWrite(
+    const response = await this.requestWrite(
       creating
         ? this.url('study_materials')
         : this.url(`study_materials/${input.studyMaterialId}`),
@@ -265,6 +283,10 @@ export class HttpWaniKaniApi implements WaniKaniApi {
       { study_material: studyMaterial },
       input.signal,
     );
+    const material = decodeIdentified<StudyMaterialData, 'study_material'>(response.body,
+      'study_material', this.url('study_materials'), response.status);
+    if (material.data.subject_id !== input.subjectId) throw new ApiDecodeError('Study material identity mismatch');
+    return material;
   }
 
   private fetchCollection<T, TObject extends WaniKaniObject>(
@@ -303,12 +325,8 @@ export class HttpWaniKaniApi implements WaniKaniApi {
     method: 'POST' | 'PUT',
     body: object,
     signal?: AbortSignal,
-  ): Promise<void> {
-    await this.request(url, {
-      method,
-      body: JSON.stringify(body),
-      signal,
-    });
+  ): Promise<{ readonly body: unknown; readonly status: number }> {
+    return this.requestJson(url, { method, body: JSON.stringify(body), signal });
   }
 
   private async requestJson(
@@ -414,7 +432,9 @@ async function preserveUpdatedAfter<
   const page = await pagePromise;
   return {
     ...page,
-    data_updated_at: page.data_updated_at ?? updatedAfter,
+    data_updated_at: page.data_updated_at === null ? updatedAfter :
+      updatedAfter !== null && compareWaniKaniDates(page.data_updated_at, updatedAfter) < 0
+        ? updatedAfter : page.data_updated_at,
   };
 }
 
@@ -436,7 +456,53 @@ function decodeResource<T, TObject extends WaniKaniObject>(
       url,
     });
   }
+  validateResourceData(body, url, status);
   return body as unknown as Resource<T, TObject>;
+}
+
+function decodeIdentified<T, TObject extends WaniKaniObject>(
+  body: unknown, object: TObject, url: string, status: number,
+): IdentifiedResource<T, TObject> {
+  const resource = decodeResource<T, TObject>(body, object, url, status);
+  if (!Number.isInteger(resource.id) || (resource.id ?? 0) <= 0)
+    throw new ApiDecodeError('Missing resource identity', { url, status });
+  return resource as IdentifiedResource<T, TObject>;
+}
+
+/** Validate fields used for writes/reconciliation before trusting a receipt. */
+function validateResourceData(resource: Record<string, unknown>, url: string, status: number): void {
+  const data = resource.data;
+  const fail = () => { throw new ApiDecodeError('Invalid WaniKani resource data', { url, status }); };
+  if (!isRecord(data)) return fail();
+  if (typeof resource.data_updated_at !== 'string') return fail();
+  parseWaniKaniDate(resource.data_updated_at);
+  const integer = (value: unknown) => typeof value === 'number' && Number.isInteger(value) && value >= 0;
+  const timestamp = (value: unknown) => {
+    if (value === null) return true;
+    if (typeof value !== 'string') return false;
+    try { parseWaniKaniDate(value); return true; } catch { return false; }
+  };
+  if (resource.object === 'assignment') {
+    if (!integer(data.subject_id) || !integer(data.srs_stage) || Number(data.srs_stage) > 9 ||
+        !SUBJECT_OBJECTS.has(data.subject_type as SubjectObject) || typeof data.hidden !== 'boolean' ||
+        !['available_at', 'unlocked_at', 'started_at', 'passed_at', 'burned_at', 'resurrected_at']
+          .every((field) => timestamp(data[field]))) return fail();
+  } else if (resource.object === 'review_statistic') {
+    if (!integer(data.subject_id) || typeof data.hidden !== 'boolean' ||
+        !['meaning_correct', 'meaning_incorrect', 'reading_correct', 'reading_incorrect']
+          .every((field) => integer(data[field]))) return fail();
+  } else if (resource.object === 'study_material') {
+    if (!integer(data.subject_id) || !Array.isArray(data.meaning_synonyms) ||
+        !data.meaning_synonyms.every((value) => typeof value === 'string') ||
+        ![data.meaning_note, data.reading_note].every((value) => value === null || typeof value === 'string'))
+      return fail();
+  } else if (resource.object === 'reset') {
+    if (!integer(data.target_level) || Number(data.target_level) < 1 ||
+        !integer(data.original_level) || !timestamp(data.confirmed_at)) return fail();
+  } else if (resource.object === 'user') {
+    if (typeof data.id !== 'string' || !integer(data.level) || !isRecord(data.subscription) ||
+        !integer(data.subscription.max_level_granted)) return fail();
+  }
 }
 
 function decodeCollectionPage<T, TObject extends WaniKaniObject>(
@@ -472,6 +538,7 @@ function decodeCollectionPage<T, TObject extends WaniKaniObject>(
       url,
     });
   }
+  for (const resource of body.data) validateResourceData(resource, url, status);
   return body as unknown as CollectionPage<T, TObject>;
 }
 

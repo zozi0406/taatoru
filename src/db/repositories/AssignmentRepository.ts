@@ -1,3 +1,4 @@
+import { isOlderResource } from './resourceVersion';
 import type { AssignmentData, IdentifiedResource } from '@/api/types';
 import type { Database } from '../Database';
 import { SUBJECT_WITHIN_GRANTED_LEVEL } from '../subscription';
@@ -24,6 +25,7 @@ export class AssignmentRepository {
   ): Promise<void> {
     return this.db.transaction(async (tx) => {
       for (const resource of resources) {
+        if (await isOlderResource(tx, 'assignments', resource.data.subject_id, resource.data_updated_at)) continue;
         const data = resource.data;
         await tx.run(
           `INSERT INTO assignments (

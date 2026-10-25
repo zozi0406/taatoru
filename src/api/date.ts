@@ -64,6 +64,23 @@ export function parseWaniKaniDate(value: string): Date {
   return new Date(localDate.getTime() - offsetMinutes * 60_000);
 }
 
+/** Date alone truncates the last three microsecond digits used by the API. */
+export function compareWaniKaniDates(left: string, right: string): number {
+  const a = parseWaniKaniDate(left).getTime();
+  const b = parseWaniKaniDate(right).getTime();
+  if (a !== b) return a < b ? -1 : 1;
+  const tail = (value: string) => (WANI_KANI_DATE_PATTERN.exec(value)?.[5] ?? '')
+    .slice(3).padEnd(3, '0');
+  return tail(left).localeCompare(tail(right));
+}
+
+export function replayCursor(value: string | null): string | null {
+  if (value === null) return null;
+  const overlap = new Date(parseWaniKaniDate(value).getTime() - 1_000).toISOString();
+  const tail = (WANI_KANI_DATE_PATTERN.exec(value)?.[5] ?? '').slice(3).padEnd(3, '0');
+  return overlap.replace('Z', `${tail}Z`);
+}
+
 function parseTimezoneOffset(value: string): number {
   if (value === 'Z') {
     return 0;

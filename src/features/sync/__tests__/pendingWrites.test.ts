@@ -249,7 +249,7 @@ test('HTTP 422 drops stale progress and continues with the next item', async () 
   const api = writeApi();
   api.createReview
     .mockRejectedValueOnce(new ApiError('invalid assignment', { status: 422 }))
-    .mockResolvedValueOnce(undefined);
+    .mockResolvedValueOnce({ assignment: assignmentFixture });
   try {
     await new PendingWriteSender(db, api).sendSelectedPendingWrites(
       { progressIds: [201, 202], studyMaterialIds: [] },
@@ -310,6 +310,7 @@ test('progress sends sequentially in creation order', async () => {
   const api = writeApi();
   api.createReview.mockImplementation(async ({ assignmentId }) => {
     events.push(assignmentId ?? -1);
+    return { assignment: { ...assignmentFixture, id: assignmentId ?? 501 } };
   });
   try {
     await new PendingWriteSender(db, api).sendSelectedPendingWrites(
@@ -367,7 +368,7 @@ test('study-material success removes its marker and failure preserves it', async
   );
   const api = writeApi();
   api.upsertStudyMaterial
-    .mockResolvedValueOnce(undefined)
+    .mockResolvedValueOnce(studyMaterialFixture)
     .mockRejectedValueOnce(new NetworkError('offline'));
   try {
     await expect(

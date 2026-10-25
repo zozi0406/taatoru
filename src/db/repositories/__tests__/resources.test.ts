@@ -79,3 +79,19 @@ test('assignment replacement preserves the local mistake timestamp', async () =>
     await db.close();
   }
 });
+
+test('overlapping downloads cannot replace a newer assignment with an older microsecond version', async () => {
+  const db = await NodeTestDatabase.open();
+  try {
+    await migrateDatabase(db);
+    await new SubjectRepository(db).replaceSubjects([kanjiFixture], null);
+    const repository = new AssignmentRepository(db);
+    await repository.replaceAssignments([{ ...assignmentFixture,
+      data_updated_at: '2026-10-24T10:00:00.123456Z',
+      data: { ...assignmentFixture.data, srs_stage: 4 } }], null);
+    await repository.replaceAssignments([{ ...assignmentFixture,
+      data_updated_at: '2026-10-24T10:00:00.123455Z' }], null);
+    expect(await db.first('SELECT srs_stage FROM assignments')).toEqual({ srs_stage: 4 });
+    expect(await db.first('SELECT srs_stage FROM subject_progress')).toEqual({ srs_stage: 4 });
+  } finally { await db.close(); }
+});

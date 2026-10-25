@@ -29,10 +29,25 @@ export type WaniKaniObject =
   | 'assignment'
   | 'level_progression'
   | 'review_statistic'
+  | 'reset'
   | 'study_material'
   | 'user'
   | 'voice_actor'
   | SubjectObject;
+
+export interface ResetData {
+  readonly created_at: WaniKaniTimestamp;
+  readonly confirmed_at: WaniKaniTimestamp | null;
+  readonly original_level: number;
+  readonly target_level: number;
+}
+
+export interface ProgressReceipt {
+  readonly assignment: IdentifiedResource<AssignmentData, 'assignment'>;
+  readonly reviewStatistic?: IdentifiedResource<ReviewStatisticData, 'review_statistic'>;
+}
+
+export type MaterialReceipt = IdentifiedResource<StudyMaterialData, 'study_material'>;
 
 export interface Resource<
   T,

@@ -2,6 +2,8 @@ import {
   assignmentFixture,
   collectionPage,
   kanjiFixture,
+  reviewStatisticFixture,
+  studyMaterialFixture,
   userFixture,
 } from '../../fixtures/api';
 import { ApiDecodeError, ApiError } from '../errors';
@@ -69,7 +71,7 @@ test('updates its public budget from server rate-limit headers', async () => {
   });
 });
 
-test('applies Tsurukame collection filters without losing the update cursor', async () => {
+test('includes hidden and locked transitions and replays a conservative cursor overlap', async () => {
   const fetch = jest
     .fn()
     .mockResolvedValue(jsonResponse(collectionPage([assignmentFixture])));
@@ -78,7 +80,7 @@ test('applies Tsurukame collection filters without losing the update cursor', as
   await api.getAssignments('2026-07-29T12:34:56.123456Z');
 
   expect(fetch.mock.calls[0]?.[0]).toBe(
-    'https://api.wanikani.com/v2/assignments?unlocked=true&hidden=false&updated_after=2026-07-29T12%3A34%3A56.123456Z',
+    'https://api.wanikani.com/v2/assignments?updated_after=2026-07-29T12%3A34%3A55.123456Z',
   );
 });
 
@@ -131,7 +133,7 @@ test('decodes structured rate-limit errors without retaining query data', async 
   });
 
   const error = await api
-    .getAssignments('private-cursor')
+    .getAssignments('2026-07-29T12:34:56.123456Z')
     .catch((caught: unknown) => caught);
 
   expect(error).toBeInstanceOf(ApiError);
@@ -189,9 +191,11 @@ test('rejects malformed successful envelopes as decode errors', async () => {
 test('serializes assignment, review, and study-material writes', async () => {
   const fetch = jest
     .fn()
-    .mockResolvedValue(jsonResponse({}))
-    .mockResolvedValue(jsonResponse({}))
-    .mockResolvedValue(jsonResponse({}));
+    .mockResolvedValueOnce(jsonResponse(assignmentFixture))
+    .mockResolvedValueOnce(jsonResponse({ id: 0, object: 'review', resources_updated: {
+      assignment: assignmentFixture, review_statistic: reviewStatisticFixture,
+    } }))
+    .mockResolvedValueOnce(jsonResponse(studyMaterialFixture));
   const api = new HttpWaniKaniApi({ token: 'secret', fetch });
 
   await api.startAssignment({
@@ -248,4 +252,36 @@ test('serializes assignment, review, and study-material writes', async () => {
       }),
     ],
   ]);
+});
+
+test('downloads every review statistic using the actual 500-record continuation pages', async () => {
+  const entries = Array.from({ length: 10_000 }, (_, index) => ({ ...reviewStatisticFixture, id: index + 1 }));
+  const fetch = jest.fn(async (url: string) => {
+    const after = Number(new URL(url).searchParams.get('page_after_id') ?? 0);
+    const data = entries.filter((row) => row.id > after).slice(0, 500);
+    const end = data.at(-1)?.id ?? 10_000;
+    return jsonResponse({ ...collectionPage(data), pages: {
+      per_page: 500, previous_url: null,
+      next_url: end < 10_000 ? `https://api.wanikani.com/v2/review_statistics?page_after_id=${end}` : null,
+    } });
+  });
+  const api = new HttpWaniKaniApi({ token: 'fixture', fetch });
+  const result = await api.getReviewStatistics(null);
+  expect(result.data).toHaveLength(10_000);
+  expect(new Set(result.data.map(({ id }) => id)).size).toBe(10_000);
+  expect(result.data.some(({ id }) => id === 750)).toBe(true);
+});
+
+test('returns authoritative write resources and rejects a malformed successful receipt', async () => {
+  const fetch = jest.fn()
+    .mockResolvedValueOnce(jsonResponse({ id: 0, object: 'review', resources_updated: {
+      assignment: assignmentFixture, review_statistic: reviewStatisticFixture,
+    } }))
+    .mockResolvedValueOnce(jsonResponse({}));
+  const api = new HttpWaniKaniApi({ token: 'fixture', fetch });
+  const input = { assignmentId: 501, incorrectMeaningAnswers: 0, incorrectReadingAnswers: 0 };
+  expect(await api.createReview(input)).toEqual({
+    assignment: assignmentFixture, reviewStatistic: reviewStatisticFixture,
+  });
+  await expect(api.createReview(input)).rejects.toBeInstanceOf(ApiDecodeError);
 });

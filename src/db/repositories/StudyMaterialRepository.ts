@@ -1,3 +1,4 @@
+import { isOlderResource } from './resourceVersion';
 import type { IdentifiedResource, StudyMaterialData } from '@/api/types';
 import type { Database } from '../Database';
 import { applyPendingState } from '@/features/sync/PendingStateRepository';
@@ -14,6 +15,7 @@ export class StudyMaterialRepository {
   ): Promise<void> {
     return this.db.transaction(async (tx) => {
       for (const resource of resources) {
+        if (await isOlderResource(tx, 'study_materials', resource.data.subject_id, resource.data_updated_at)) continue;
         const data = resource.data;
         await tx.run(
           `INSERT INTO study_materials (

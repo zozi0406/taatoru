@@ -1,5 +1,5 @@
 import { ApiDecodeError } from '../errors';
-import { fetchAllPages, fetchSpeculativePages } from '../pagination';
+import { fetchAllPages } from '../pagination';
 import type { IdentifiedResource } from '../types';
 import { collectionPage } from '../../fixtures/api';
 
@@ -53,53 +53,23 @@ test('rejects a repeated next_url instead of looping forever', async () => {
   ).rejects.toBeInstanceOf(ApiDecodeError);
 });
 
-test('keeps speculative windows ordered and deduplicates resource ids', async () => {
-  const fetchPage = jest
-    .fn()
-    .mockResolvedValueOnce(collectionPage([resource(1), resource(2)]))
-    .mockResolvedValueOnce(collectionPage([resource(2), resource(3)]))
-    .mockResolvedValueOnce(collectionPage([resource(4)]));
-
-  const result = await fetchSpeculativePages({
-    url: 'https://api.wanikani.com/v2/assignments?hidden=false',
-    windows: 3,
-    perPage: 2,
-    fetchPage,
-  });
-
-  expect(result.data.map(({ id }) => id)).toEqual([1, 2, 3, 4]);
-  expect(fetchPage.mock.calls.map(([url]) => url)).toEqual([
-    'https://api.wanikani.com/v2/assignments?hidden=false&page_after_id=-1',
-    'https://api.wanikani.com/v2/assignments?hidden=false&page_after_id=1',
-    'https://api.wanikani.com/v2/assignments?hidden=false&page_after_id=3',
-  ]);
+test('keeps the first watermark when an early record changes during later page reads', async () => {
+  const fetchPage = jest.fn()
+    .mockResolvedValueOnce({ ...collectionPage([resource(1)], 'https://api.wanikani.com/v2/assignments?page_after_id=1'),
+      data_updated_at: '2026-10-24T10:00:00.123456Z' })
+    .mockResolvedValueOnce({ ...collectionPage([resource(2)]),
+      data_updated_at: '2026-10-24T10:01:00.000000Z' });
+  const result = await fetchAllPages('https://api.wanikani.com/v2/assignments', fetchPage);
+  expect(result.data_updated_at).toBe('2026-10-24T10:00:00.123456Z');
 });
 
-test('aborts sibling speculative requests when one page fails', async () => {
-  const failure = new Error('page failed');
-  let siblingAborted = false;
-  const fetchPage = jest.fn(
-    (_url: string, signal?: AbortSignal): Promise<ReturnType<typeof collectionPage>> => {
-      if (fetchPage.mock.calls.length === 2) {
-        return Promise.reject(failure);
-      }
-
-      return new Promise((_resolve, reject) => {
-        signal?.addEventListener('abort', () => {
-          siblingAborted = true;
-          reject(new Error('aborted'));
-        });
-      });
-    },
-  );
-
-  await expect(
-    fetchSpeculativePages({
-      url: 'https://api.wanikani.com/v2/assignments',
-      windows: 2,
-      perPage: 1000,
-      fetchPage,
-    }),
-  ).rejects.toBe(failure);
-  expect(siblingAborted).toBe(true);
+test('keeps the newest duplicate resource while preserving deterministic order', async () => {
+  const older = { ...resource(1), data_updated_at: '2026-10-24T10:00:00.123455Z' };
+  const newer = { ...resource(1), data_updated_at: '2026-10-24T10:00:00.123456Z' };
+  const fetchPage = jest.fn()
+    .mockResolvedValueOnce(collectionPage([older, resource(2)], 'https://api.wanikani.com/v2/assignments?page_after_id=2'))
+    .mockResolvedValueOnce(collectionPage([newer]));
+  const result = await fetchAllPages('https://api.wanikani.com/v2/assignments', fetchPage);
+  expect(result.data.map(({ id }) => id)).toEqual([1, 2]);
+  expect(result.data[0]?.data_updated_at).toBe('2026-10-24T10:00:00.123456Z');
 });

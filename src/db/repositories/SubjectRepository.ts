@@ -1,3 +1,4 @@
+import { isOlderResource } from './resourceVersion';
 import type {
   IdentifiedResource,
   SubjectData,
@@ -15,6 +16,7 @@ export class SubjectRepository {
   ): Promise<void> {
     return this.db.transaction(async (tx) => {
       for (const resource of resources) {
+        if (await isOlderResource(tx, 'subjects', resource.id, resource.data_updated_at)) continue;
         const data = resource.data;
         const readings =
           'readings' in data
