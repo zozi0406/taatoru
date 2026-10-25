@@ -31,3 +31,35 @@ export interface SrsProjection {
   readonly srsStage: number;
   readonly lastMistakeAt: string | null;
 }
+
+export interface AccountContext {
+  readonly userId: string;
+  readonly accountEpoch: number;
+  readonly credentialRevision: number;
+}
+
+export interface SyncLease {
+  readonly context: AccountContext;
+  readonly ownerFence: number;
+  readonly expiresAtMs: number;
+}
+
+export interface CredentialReservation {
+  readonly transitionId: number;
+  readonly credentialRevision: number;
+  readonly credentialKey: string;
+  readonly previousAccount: AccountContext | null;
+}
+
+export type RequestContext = SyncLease | CredentialReservation;
+export type SyncTrigger = 'enqueue' | 'startup' | 'foreground' | 'reconnect'
+  | 'manual' | 'credential-repair' | 'background';
+export type PendingDeliveryState = 'queued' | 'in_flight' | 'uncertain' | 'rejected';
+
+export interface QueueSummary {
+  /** Total across all states, including future retries. */
+  readonly pending: number;
+  readonly uncertain: number;
+  readonly rejected: number;
+  readonly nextAttemptAt: string | null;
+}

@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const MIGRATION_1_STATEMENTS: readonly string[] = [
   `CREATE TABLE IF NOT EXISTS sync_state (

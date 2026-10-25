@@ -21,6 +21,39 @@ import { PendingWriteSender } from '../PendingWriteSender';
 
 const FIXED_NOW = new Date('2026-07-29T12:00:00.000Z');
 
+test('completion persists immutable identity, original opportunity, and projection', async () => {
+  const db = await reviewDatabase();
+  try {
+    await new PendingWriteRepository(db).completeReview({
+      assignmentId: 501, subjectId: 201, incorrectMeaningAnswers: 0,
+      incorrectReadingAnswers: 0, completedAt: FIXED_NOW,
+    });
+    const row = await db.first<{ operation_key: string; source_json: string; projection_json: string }>(
+      'SELECT operation_key, source_json, projection_json FROM pending_progress',
+    );
+    expect(row?.operation_key).toBe('0:1');
+    expect(JSON.parse(row!.source_json).assignment.data.srs_stage).toBe(2);
+    expect(JSON.parse(row!.projection_json).srsStage).toBe(3);
+  } finally { await db.close(); }
+});
+
+test('new material revisions retain their original server baseline', async () => {
+  const db = await reviewDatabase();
+  try {
+    await new StudyMaterialRepository(db).replaceStudyMaterials([studyMaterialFixture], null);
+    const writes = new PendingWriteRepository(db);
+    const material = { subjectId: 201, meaningNote: 'first', readingNote: null,
+      meaningSynonyms: ['local'], queuedAt: FIXED_NOW };
+    await writes.queueStudyMaterial(material);
+    await writes.queueStudyMaterial({ ...material, meaningNote: 'second' });
+    const row = await db.first<{ revision: number; source_json: string }>(
+      'SELECT revision, source_json FROM pending_study_materials',
+    );
+    expect(row?.revision).toBe(2);
+    expect(JSON.parse(row!.source_json)).toEqual(studyMaterialFixture);
+  } finally { await db.close(); }
+});
+
 test('queues a review and updates local state in one transaction', async () => {
   const db = await reviewDatabase();
   try {

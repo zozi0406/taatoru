@@ -41,7 +41,7 @@ test('initializes the singleton sync cursor row exactly once', async () => {
     expect(await db.all('SELECT * FROM sync_state')).toEqual([
       expect.objectContaining({
         id: 1,
-        schema_version: 1,
+        schema_version: 2,
         assignments_updated_at: null,
         study_materials_updated_at: null,
         subjects_updated_at: null,
@@ -51,7 +51,7 @@ test('initializes the singleton sync cursor row exactly once', async () => {
     ]);
     expect(
       await db.first<{ user_version: number }>('PRAGMA user_version'),
-    ).toEqual({ user_version: 1 });
+    ).toEqual({ user_version: 2 });
   } finally {
     await db.close();
   }
