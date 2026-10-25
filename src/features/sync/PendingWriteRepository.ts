@@ -39,6 +39,7 @@ export interface QueuedStudyMaterial {
   readonly readingNote: string | null;
   readonly meaningSynonyms: readonly string[];
   readonly queuedAt: Date;
+  readonly baselineJson?: string;
 }
 
 interface ProgressRow {
@@ -177,7 +178,7 @@ export class PendingWriteRepository {
           queuedAt,
           operationKey,
           epoch,
-          target.resourceJson ?? 'null',
+          material.baselineJson ?? target.resourceJson ?? 'null',
         ],
       );
       await tx.run(

@@ -1,6 +1,6 @@
 import type { WaniKaniApi } from '@/api/WaniKaniApi';
 import { collectionPage, userFixture } from '@/fixtures/api';
-import { SYNC_NOW, syncDatabase, syncResources } from '@/test/sync/fixtures';
+import { syncDatabase } from '@/test/sync/fixtures';
 import { SyncPreflight } from '../SyncPreflight';
 import { SyncControlRepository } from '../SyncControlRepository';
 import { PendingWriteRepository } from '../PendingWriteRepository';

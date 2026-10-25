@@ -5,9 +5,11 @@ import { useAppServices } from '@/app/AppProviders';
 import { HomeScreen } from '@/features/home/HomeScreen';
 import { getDashboardSnapshot } from '@/features/home/dashboard';
 import { startAutomaticLessons } from '@/features/lessons/lessonLauncher';
+import { useAuth } from '@/features/auth/AuthProvider';
 
 export default function HomeRoute() {
   const services = useAppServices();
+  const auth = useAuth();
   const router = useRouter();
   const loadSnapshot = useCallback(async () => {
     const online = await services.isOnline();
@@ -29,6 +31,10 @@ export default function HomeRoute() {
       }}
       onStartReviews={() => router.push('/reviews/session')}
       synchronize={services.synchronize}
+      syncStore={services.syncStore}
+      subscribeToData={services.subscribeToData}
+      onSyncAttention={() => router.push('/sync')}
+      onSignOut={() => { void auth.logout(); }}
     />
   );
 }

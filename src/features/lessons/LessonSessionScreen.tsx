@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { SubjectResource } from '@/api/types';
 import type { LessonSessionSnapshot } from '@/features/sessions/SessionRepository';
 import {
@@ -41,6 +41,9 @@ export function LessonSessionScreen({
   onOpenSubject,
 }: LessonSessionScreenProps) {
   const [snapshot, setSnapshot] = useState(initialSnapshot);
+  const presenting = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const playAudio = useStudyAudio(onPlayAudio);
   const [presentationBusy, setPresentationBusy] = useState(false);
   const [presentationError, setPresentationError] = useState<string | null>(
@@ -52,6 +55,7 @@ export function LessonSessionScreen({
   const apply = async (type: Parameters<typeof reduceLesson>[1]['type']) => {
     const result = reduceLesson(snapshot, { type }, types, settings);
     await onCommitTransition(result);
+    if (!mounted.current) return;
     setSnapshot(result.snapshot);
     const current = subjects.find(
       ({ id }) => id === snapshot.items[snapshot.queuePosition]?.subjectId,
@@ -74,7 +78,8 @@ export function LessonSessionScreen({
     apply,
   });
   const present = async (type: Parameters<typeof reduceLesson>[1]['type']) => {
-    if (presentationBusy) return;
+    if (presenting.current) return;
+    presenting.current = true;
     setPresentationBusy(true);
     setPresentationError(null);
     try {
@@ -84,6 +89,7 @@ export function LessonSessionScreen({
         'Unable to preserve lesson progress. Please try again.',
       );
     } finally {
+      presenting.current = false;
       setPresentationBusy(false);
     }
   };
@@ -120,9 +126,9 @@ export function LessonSessionScreen({
         onPlayAudio={playAudio}
         busy={presentationBusy}
         error={presentationError}
-        onExit={onExit}
-        onSettings={onSettings}
-        onOpenSubject={onOpenSubject}
+        onExit={() => { if (!presenting.current) onExit(); }}
+        onSettings={onSettings === undefined ? undefined : () => { if (!presenting.current) onSettings(); }}
+        onOpenSubject={onOpenSubject === undefined ? undefined : (id) => { if (!presenting.current) onOpenSubject(id); }}
         onNext={() => {
           void present('advance-presentation');
         }}
@@ -147,9 +153,9 @@ export function LessonSessionScreen({
       total={snapshot.items.length}
       subject={subject}
       prompt={prompt}
-      onExit={onExit}
-      onSettings={onSettings}
-      onOpenSubject={onOpenSubject}
+      onExit={() => actions.guard(onExit)}
+      onSettings={onSettings === undefined ? undefined : () => actions.guard(onSettings)}
+      onOpenSubject={onOpenSubject === undefined ? undefined : (id) => actions.guard(() => onOpenSubject(id))}
       onPlayAudio={playAudio}
       material={studyMaterials[subject.id]}
       onSubmit={(answer) =>

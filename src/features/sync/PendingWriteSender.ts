@@ -33,6 +33,7 @@ export class PendingWriteSender {
     private readonly db: Database,
     private readonly api: WaniKaniApi,
     private readonly ownerFence = 0,
+    private readonly maxLevelGranted?: number,
   ) {}
 
   async sendSelectedPendingWrites(
@@ -59,7 +60,7 @@ export class PendingWriteSender {
     signal?: AbortSignal,
   ): Promise<void> {
     const repository = new SyncRepository(this.db);
-    const reconciler = new WriteReconciler(this.db, this.api);
+    const reconciler = new WriteReconciler(this.db, this.api, this.maxLevelGranted);
     const resolution = await reconciler.reconcileProgress(progress, now, signal);
     if (resolution.kind !== 'retry') {
       await repository.settleProgress(progress, resolution, now);

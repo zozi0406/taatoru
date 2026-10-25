@@ -321,6 +321,26 @@ test('blocks duplicate submissions while a review is being persisted', async () 
   expect(screen.getByText('Reviews complete')).toBeVisible();
 });
 
+test('a held wrong-answer commit cannot be overtaken by a correct answer or Exit', async () => {
+  let release!: () => void;
+  const commit = jest.fn(async (_transition: ReviewTransition) => {});
+  commit.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
+  const exit = jest.fn();
+  await renderApp(<ThemeProvider scheme="light"><ReviewSessionScreen initialSnapshot={snapshot()}
+    subjects={[radicalFixture]} onCommitTransition={commit} onExit={exit} onFinish={async () => {}} /></ThemeProvider>);
+  await submit('sky');
+  await act(async () => {
+    await fireEvent.changeText(screen.getByLabelText('Meaning answer'), 'ground');
+    await fireEvent.press(screen.getByRole('button', { name: 'Submit answer' }));
+    await fireEvent.press(screen.getByRole('button', { name: 'Exit review session' }));
+  });
+  expect(commit).toHaveBeenCalledTimes(1); expect(exit).not.toHaveBeenCalled();
+  await act(async () => { release(); });
+  await fireEvent.press(screen.getByRole('button', { name: 'Continue' }));
+  await submit('ground');
+  expect(commit).toHaveBeenLastCalledWith(expect.objectContaining({ completedItem: expect.objectContaining({ incorrectMeaningAnswers: 1 }) }));
+});
+
 async function submit(answer: string) {
   await act(async () => {
     await fireEvent.changeText(screen.getByLabelText('Meaning answer'), answer);

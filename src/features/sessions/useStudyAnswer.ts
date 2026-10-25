@@ -88,6 +88,7 @@ export function useStudyAnswer({
     }, result.verdict === 'correct');
   };
   return {
+    guard: (action: () => void) => { if (!working.current) action(); },
     feedback,
     busy,
     error,

@@ -1,6 +1,7 @@
 import type { Database } from '@/db/Database';
 import type { SubjectStudyMaterial } from '@/features/subjects/subjectDetails';
 import { PendingWriteRepository } from '@/features/sync/PendingWriteRepository';
+import { TransactionDatabase } from '@/features/sync/SyncRepository';
 
 export async function loadStudyMaterials(
   db: Database,
@@ -35,16 +36,19 @@ export async function addStudySynonym(
   synonym: string,
 ): Promise<void> {
   if (synonym.trim() === '') throw new Error('A synonym cannot be empty');
-  const material = (await loadStudyMaterials(db, [subjectId]))[subjectId];
-  const synonyms = material?.meaningSynonyms ?? [];
-  const exists = synonyms.some(
-    (value) => value.toLowerCase() === synonym.trim().toLowerCase(),
-  );
-  await new PendingWriteRepository(db).queueStudyMaterial({
-    subjectId,
-    meaningNote: material?.meaningNote ?? null,
-    readingNote: material?.readingNote ?? null,
-    meaningSynonyms: exists ? synonyms : [...synonyms, synonym.trim()],
-    queuedAt: new Date(),
+  await db.transaction(async (tx) => {
+    const scoped = new TransactionDatabase(tx);
+    const material = (await loadStudyMaterials(scoped, [subjectId]))[subjectId];
+    const synonyms = material?.meaningSynonyms ?? [];
+    const exists = synonyms.some(
+      (value) => value.toLowerCase() === synonym.trim().toLowerCase(),
+    );
+    await new PendingWriteRepository(scoped).queueStudyMaterial({
+      subjectId,
+      meaningNote: material?.meaningNote ?? null,
+      readingNote: material?.readingNote ?? null,
+      meaningSynonyms: exists ? synonyms : [...synonyms, synonym.trim()],
+      queuedAt: new Date(),
+    });
   });
 }

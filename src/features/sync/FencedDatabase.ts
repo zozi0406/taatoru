@@ -14,12 +14,18 @@ export class AccountDatabase implements Database {
     return this.transaction((tx) => tx.run(sql, params));
   }
 
-  first<T>(sql: string, params?: readonly SqlValue[]): Promise<T | null> {
-    return this.db.first<T>(sql, params);
+  async first<T>(sql: string, params?: readonly SqlValue[]): Promise<T | null> {
+    await this.assertCurrent(this.db);
+    const row = await this.db.first<T>(sql, params);
+    await this.assertCurrent(this.db);
+    return row;
   }
 
-  all<T>(sql: string, params?: readonly SqlValue[]): Promise<readonly T[]> {
-    return this.db.all<T>(sql, params);
+  async all<T>(sql: string, params?: readonly SqlValue[]): Promise<readonly T[]> {
+    await this.assertCurrent(this.db);
+    const rows = await this.db.all<T>(sql, params);
+    await this.assertCurrent(this.db);
+    return rows;
   }
 
   transaction<T>(operation: (tx: DatabaseTransaction) => Promise<T>): Promise<T> {

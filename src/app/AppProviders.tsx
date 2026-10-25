@@ -29,6 +29,8 @@ import { SecureTokenStore, type TokenStore } from '@/features/auth/tokenStore';
 import { observeConnectivity } from '@/features/connectivity/observeConnectivity';
 import { RequestScheduler } from '@/api/RequestScheduler';
 import { SyncCoordinator } from '@/features/sync/SyncCoordinator';
+import { AccountDatabase } from '@/features/sync/FencedDatabase';
+import { createSyncStore, type SyncStore } from '@/features/sync/syncStore';
 import { OwnedSyncEngine } from '@/features/sync/OwnedSyncEngine';
 import { SyncControlRepository } from '@/features/sync/SyncControlRepository';
 import type { AccountContext } from '@/features/sync/types';
@@ -55,6 +57,8 @@ export interface AppServices {
   readonly synchronize: (mode: SyncMode) => Promise<SyncResult>;
   readonly notifyPendingWrites: () => void;
   readonly setForeground: (active: boolean) => void;
+  readonly syncStore: SyncStore;
+  readonly subscribeToData: (listener: () => void) => () => void;
 }
 
 const AppServicesContext = createContext<AppServices | null>(null);
@@ -84,11 +88,17 @@ export function AppProviders({ children }: PropsWithChildren) {
         const notificationService = new NotificationService(
           new ExpoNotificationPlatform(),
         );
-        const rebuildNotifications = async () => {
+        const rebuildForAccount = async (expected?: AccountContext) => {
+          const control = new SyncControlRepository(openedDatabase);
+          const context = expected ?? await control.getLocalAccountContext();
+          if (context === null) return;
+          const assertCurrent = () => control.assertAccount(openedDatabase, context);
+          await assertCurrent();
           await notificationService.rebuild(
-            await loadReviewNotificationInput(openedDatabase, new Date()),
+            await loadReviewNotificationInput(new AccountDatabase(openedDatabase, context), new Date()), assertCurrent,
           );
         };
+        const rebuildNotifications = () => rebuildForAccount();
         const isOnline = async () => {
           try {
             const network = await Network.getNetworkStateAsync();
@@ -101,14 +111,20 @@ export function AppProviders({ children }: PropsWithChildren) {
           }
         };
         const control = new SyncControlRepository(openedDatabase);
+        const syncStore = createSyncStore();
+        const dataListeners = new Set<() => void>();
+        const invalidate = () => { for (const listener of dataListeners) listener(); };
+        let unsubscribeSync: (() => void) | undefined;
         let runtimeToken: string | null = null;
         let runtimeSyncEngine: SyncCoordinator | null = null;
         let runtimeContextKey: string | null = null;
-        disposeRuntime = () => runtimeSyncEngine?.dispose();
+        let foreground = false;
+        disposeRuntime = () => { runtimeSyncEngine?.dispose(); unsubscribeSync?.(); };
         const createSyncEngine = (token: string, context: AccountContext): SyncEngine => {
           const contextKey = `${context.accountEpoch}:${context.credentialRevision}`;
           if (runtimeSyncEngine !== null && runtimeToken === token && runtimeContextKey === contextKey) return runtimeSyncEngine;
           runtimeSyncEngine?.dispose();
+          unsubscribeSync?.();
           const engine = new OwnedSyncEngine({
             db: openedDatabase, context,
             apiFactory: (lease, signal) => {
@@ -118,13 +134,14 @@ export function AppProviders({ children }: PropsWithChildren) {
                 onRateLimit: (budget) => scheduler.recordBudget(budget, lease),
               });
             },
-            isOnline, invalidate: () => {},
-            updateNotifications: rebuildNotifications,
+            isOnline, invalidate,
+            updateNotifications: () => rebuildForAccount(context),
             now: () => new Date(),
           });
           runtimeSyncEngine = new SyncCoordinator({ db: openedDatabase, context, engine });
+          unsubscribeSync = runtimeSyncEngine.store.subscribe((state) => syncStore.setState(state));
           // AuthProvider owns initial-setup retry timing until the account opens.
-          runtimeSyncEngine.setForeground(false);
+          runtimeSyncEngine.setForeground(foreground);
           runtimeToken = token; runtimeContextKey = contextKey;
           return runtimeSyncEngine;
         };
@@ -161,7 +178,13 @@ export function AppProviders({ children }: PropsWithChildren) {
             });
           },
           syncFactory: createSyncEngine,
-          clearAccount: () => syncRepository.clearForLogout(),
+          clearAccount: async () => {
+            await syncRepository.clearForLogout();
+            runtimeSyncEngine?.dispose(); unsubscribeSync?.();
+            syncStore.setState({ isSyncing: false, phase: 'idle', lastResult: null });
+            const platform = new ExpoNotificationPlatform();
+            await platform.cancelAll(); await platform.setBadge(0);
+          },
         });
         if (active) {
           setServices({
@@ -171,8 +194,10 @@ export function AppProviders({ children }: PropsWithChildren) {
             isOnline,
             rebuildNotifications,
             synchronize,
-            notifyPendingWrites: () => runtimeSyncEngine?.notifyPendingWrites(),
-            setForeground: (value) => runtimeSyncEngine?.setForeground(value),
+            notifyPendingWrites: () => { invalidate(); runtimeSyncEngine?.notifyPendingWrites(); },
+            setForeground: (value) => { foreground = value; runtimeSyncEngine?.setForeground(value); },
+            syncStore,
+            subscribeToData: (listener) => { dataListeners.add(listener); return () => { dataListeners.delete(listener); }; },
           });
         }
       } catch (bootstrapError) {
@@ -288,6 +313,19 @@ function AuthenticatedRuntime({
   services,
 }: PropsWithChildren<{ readonly services: AppServices }>) {
   const auth = useAuth();
+  const [accountServices, setAccountServices] = useState<{ version: number; services: AppServices; epoch: number } | null>(null);
+  useEffect(() => {
+    if (auth.status !== 'authenticated') return;
+    let active = true;
+    void new SyncControlRepository(services.db).getLocalAccountContext().then((context) => {
+      if (active && context !== null) setAccountServices({ version: auth.accountVersion, epoch: context.accountEpoch,
+        services: { ...services, db: new AccountDatabase(services.db, context), notifyPendingWrites: () => {
+          void new SyncControlRepository(services.db).assertAccount(services.db, context)
+            .then(() => services.notifyPendingWrites()).catch(() => {});
+        } } });
+    });
+    return () => { active = false; };
+  }, [auth.status, auth.accountVersion, services]);
   useEffect(() => {
     if (auth.status !== 'authenticated') { services.setForeground(false); return; }
     services.setForeground(AppState.currentState !== 'background' && AppState.currentState !== 'inactive');
@@ -299,9 +337,9 @@ function AuthenticatedRuntime({
     return () => { subscription.remove(); if (timer !== undefined) clearTimeout(timer); services.setForeground(false); };
   }, [auth.status, services]);
   return (
-    <>
-      {children}
-    </>
+    auth.status === 'authenticated' ? accountServices?.version === auth.accountVersion ?
+      <AppServicesContext key={accountServices.epoch} value={accountServices.services}>{children}</AppServicesContext> :
+      <ActivityIndicator accessibilityLabel="Opening your account" /> : <>{children}</>
   );
 }
 

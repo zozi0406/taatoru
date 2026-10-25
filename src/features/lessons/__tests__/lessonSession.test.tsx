@@ -7,6 +7,16 @@ import { ThemeProvider } from '@/ui/theme/ThemeProvider';
 import { LessonSessionScreen } from '../LessonSessionScreen';
 import type { LessonTransition } from '../lessonReducer';
 
+let mockPresentationQuiz: (() => void) | undefined;
+jest.mock('../LessonSubjectStage', () => {
+  const actual = jest.requireActual('../LessonSubjectStage');
+  const React = jest.requireActual('react');
+  return { ...actual, LessonSubjectStage: (props: Parameters<typeof import('../LessonSubjectStage').LessonSubjectStage>[0]) => {
+    mockPresentationQuiz = props.onQuiz;
+    return React.createElement(actual.LessonSubjectStage, props);
+  } };
+});
+
 jest.mock('expo-audio', () => ({
   useAudioPlayer: () => ({
     play: jest.fn(),
@@ -160,6 +170,19 @@ test('can read forward and back before starting the quiz without completing less
       ([transition]) => transition.completedItem === null,
     ),
   ).toBe(true);
+});
+
+test('two presentation taps in one event turn create one durable transition', async () => {
+  let finish!: () => void;
+  const commit = jest.fn((_transition: LessonTransition) => new Promise<void>((resolve) => { finish = resolve; }));
+  await renderApp(<ThemeProvider scheme="light"><LessonSessionScreen initialSnapshot={snapshot()}
+    onCommitTransition={commit} onExit={jest.fn()} onFinish={async () => {}} subjects={[radicalFixture]} /></ThemeProvider>);
+  const press = mockPresentationQuiz!;
+  await act(async () => { press(); press(); });
+  expect(commit).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole('button', { name: 'Exit lesson session' })).toBeDisabled();
+  await act(async () => { finish(); });
+  expect(screen.getByLabelText('Meaning answer')).toBeVisible();
 });
 
 function snapshot(): LessonSessionSnapshot {

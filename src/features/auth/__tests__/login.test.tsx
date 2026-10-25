@@ -219,10 +219,12 @@ test('a different account requires explicit replacement before pending data is c
     expect(harness.tokenStore.set).not.toHaveBeenCalled();
     await expect(pendingCount(harness.db)).resolves.toBe(1);
 
-    await harness.manager.changeAccount('other-token');
+    await expect(harness.manager.changeAccount('other-token')).rejects.toThrow('Changes are still waiting');
+    await expect(pendingCount(harness.db)).resolves.toBe(1);
+    await harness.manager.changeAccount('other-token', undefined, true);
     await expect(pendingCount(harness.db)).resolves.toBe(0);
     expect((await new SyncControlRepository(harness.db).getAccountContext())?.userId).toBe('another-user-id');
-    expect(harness.tokenStore.setCredential).toHaveBeenLastCalledWith('taatoru.credential.2', 'other-token');
+    expect(harness.tokenStore.setCredential).toHaveBeenLastCalledWith('taatoru.credential.3', 'other-token');
     expect(harness.synchronize).toHaveBeenCalledWith('quick');
   } finally {
     await harness.db.close();

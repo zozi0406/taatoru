@@ -117,6 +117,16 @@ test.each(['counts', 'future', 'reset', 'resurrected'] as const)('%s cannot turn
   } finally { await db.close(); }
 });
 
+test('a remote reset before an offline completion still invalidates its cached opportunity', async () => {
+  const db = await queuedReview(); const api = new FixtureSyncApi();
+  try {
+    await db.run("INSERT INTO sync_resets VALUES (2, '2026-10-24T13:00:00Z', 1, '2026-10-24T13:00:00Z')");
+    await new PendingWriteSender(db, api).sendSelectedPendingWrites(selection, SYNC_NOW);
+    expect(api.reviews).toHaveLength(0);
+    expect(await db.first('SELECT last_error_kind FROM pending_progress')).toEqual({ last_error_kind: 'account-reset' });
+  } finally { await db.close(); }
+});
+
 test.each([-600_000, 600_000])('clock skew %i is frozen into the first wire timestamp', async (skew) => {
   const db = await queuedReview();
   const api = new FixtureSyncApi();

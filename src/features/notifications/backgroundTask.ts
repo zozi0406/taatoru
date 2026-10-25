@@ -5,6 +5,7 @@ import * as TaskManager from 'expo-task-manager';
 import { HttpWaniKaniApi } from '@/api/HttpWaniKaniApi';
 import { RequestScheduler } from '@/api/RequestScheduler';
 import { SyncCoordinator } from '@/features/sync/SyncCoordinator';
+import { AccountDatabase } from '@/features/sync/FencedDatabase';
 import { ExpoDatabase } from '@/db/ExpoDatabase';
 import { migrateDatabase } from '@/db/migrate';
 import { SecureTokenStore } from '@/features/auth/tokenStore';
@@ -66,7 +67,8 @@ export async function runBackgroundQuickSync(): Promise<boolean> {
       },
       updateNotifications: async () => {
         await notificationService.rebuild(
-          await loadReviewNotificationInput(db, new Date()),
+          await loadReviewNotificationInput(new AccountDatabase(db, context), new Date()),
+          () => new SyncControlRepository(db).assertAccount(db, context),
         );
       },
       now: () => new Date(),

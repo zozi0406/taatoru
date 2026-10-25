@@ -28,6 +28,7 @@ import type {
   UserData,
   VoiceActorData,
   AssignmentData,
+  MaterialReceipt,
 } from '@/api/types';
 import type {
   Database,
@@ -43,7 +44,6 @@ import { SubjectRepository } from '@/db/repositories/SubjectRepository';
 import { mergeRecentMistakes } from './recentMistakes';
 import { SyncControlRepository } from './SyncControlRepository';
 import type { RecentMistake, PendingProgressOperation, OperationResolution, PendingMaterialOperation, QueueSummary } from './types';
-import type { MaterialReceipt } from '@/api/types';
 import { applyPendingState } from './PendingStateRepository';
 
 export interface SyncCursors {

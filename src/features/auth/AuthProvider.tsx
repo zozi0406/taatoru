@@ -18,6 +18,7 @@ import {
 import type { TokenStore } from './tokenStore';
 import { SyncControlRepository } from '@/features/sync/SyncControlRepository';
 import type { AccountContext, CredentialReservation } from '@/features/sync/types';
+import { Alert } from 'react-native';
 
 export class EmptyTokenError extends Error {
   constructor() {
@@ -80,12 +81,18 @@ type InitialSyncReporter = (state: InitialSyncState) => void;
 export class AuthManager {
   constructor(private readonly options: AuthManagerOptions) {}
 
+  async resumeCachedAccount(): Promise<boolean> {
+    const cached = await this.cachedAccount();
+    const context = await new SyncControlRepository(this.options.db).getLocalAccountContext();
+    return cached?.synchronized === true && context?.userId === cached.user.data.id;
+  }
+
   login(tokenValue: string, report?: InitialSyncReporter): Promise<Resource<UserData, 'user'>> {
     return this.connect(tokenValue, false, report);
   }
 
-  changeAccount(tokenValue: string, report?: InitialSyncReporter): Promise<Resource<UserData, 'user'>> {
-    return this.connect(tokenValue, true, report);
+  changeAccount(tokenValue: string, report?: InitialSyncReporter, discardPending = false): Promise<Resource<UserData, 'user'>> {
+    return this.connect(tokenValue, true, report, discardPending);
   }
 
   async resume(token: string): Promise<Resource<UserData, 'user'>> {
@@ -100,7 +107,7 @@ export class AuthManager {
   }
 
   private async connect(
-    tokenValue: string, replace: boolean, report?: InitialSyncReporter,
+    tokenValue: string, replace: boolean, report?: InitialSyncReporter, discardPending = false,
   ): Promise<Resource<UserData, 'user'>> {
     const token = tokenValue.trim();
     if (token.length === 0) throw new EmptyTokenError();
@@ -115,6 +122,8 @@ export class AuthManager {
       const cached = await this.cachedAccount();
       if (!replace && cached !== null && cached.user.data.id !== user.data.id)
         throw new AccountChangeRequiredError();
+      if (replace && !discardPending && cached !== null && cached.user.data.id !== user.data.id && await this.hasPendingChanges())
+        throw new PendingChangesError();
       const context = await control.activateCredentials(reservation, user.data.id, replace);
       activated = true;
       if (cached === null || !cached.synchronized || cached.user.data.id !== user.data.id) {
@@ -155,11 +164,23 @@ export class AuthManager {
   }
 
   async logout(discardPending = false): Promise<void> {
-    const row = await this.options.db.first<{ count: number }>(`SELECT
-      (SELECT COUNT(*) FROM pending_progress) +
-      (SELECT COUNT(*) FROM pending_study_materials) AS count`);
-    if (!discardPending && (row?.count ?? 0) > 0) throw new PendingChangesError();
+    if (!discardPending && await this.hasPendingChanges()) throw new PendingChangesError();
     await this.removeAccount();
+  }
+
+  async syncPendingChanges(): Promise<void> {
+    const token = await this.options.tokenStore.get();
+    const context = await new SyncControlRepository(this.options.db).getAccountContext();
+    if (token === null || context === null) throw new InvalidTokenError();
+    const result = await this.options.syncFactory(token, context).synchronize('quick');
+    if (result.status !== 'completed' || await this.hasPendingChanges()) throw new PendingChangesError();
+  }
+
+  private async hasPendingChanges(): Promise<boolean> {
+    const row = await this.options.db.first<{ count: number }>(`SELECT
+      (SELECT COUNT(*) FROM pending_progress) + (SELECT COUNT(*) FROM pending_study_materials) +
+      (SELECT COUNT(*) FROM sync_dispatches) AS count`);
+    return (row?.count ?? 0) > 0;
   }
 
   private async removeAccount(): Promise<void> {
@@ -258,9 +279,11 @@ export interface InitialSyncState {
 
 interface AuthContextValue {
   readonly status: AuthStatus;
+  readonly accountVersion: number;
   readonly busy: boolean;
   readonly error: string | null;
   readonly requiresAccountChange: boolean;
+  repairCredentials(): void;
   readonly initialSync: InitialSyncState | null;
   login(token: string): Promise<void>;
   changeAccount(token: string): Promise<void>;
@@ -283,6 +306,7 @@ export function AuthProvider({
   tokenStore,
 }: AuthProviderProps) {
   const [status, setStatus] = useState<AuthStatus>('bootstrapping');
+  const [accountVersion, setAccountVersion] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [requiresAccountChange, setRequiresAccountChange] =
@@ -306,6 +330,10 @@ export function AuthProvider({
         const token = await tokenStore.get();
         if (token === null) {
           const pendingToken = await tokenStore.getPending();
+          if (pendingToken === null && await manager.resumeCachedAccount()) {
+            if (active) { setAccountVersion((value) => value + 1); setStatus('authenticated'); }
+            return;
+          }
           if (active) {
             if (pendingToken !== null) {
               setInitialSync({
@@ -323,6 +351,7 @@ export function AuthProvider({
         if (active) {
           await tokenStore.removePending();
           setStatus('authenticated');
+          setAccountVersion((value) => value + 1);
         }
       } catch (resumeError) {
         if (active) {
@@ -350,6 +379,7 @@ export function AuthProvider({
         await operation();
         setInitialSync(null);
         setStatus('authenticated');
+        setAccountVersion((value) => value + 1);
       } catch (operationError) {
         const operationMessage = messageFor(operationError);
         setError(operationMessage);
@@ -406,14 +436,27 @@ export function AuthProvider({
   const value = useMemo<AuthContextValue>(
     () => ({
       status,
+      accountVersion,
       busy,
       error,
       initialSync,
       requiresAccountChange,
+      repairCredentials: () => { setInitialSync(null); setStatus('unauthenticated'); },
       login: (token) =>
         perform(() => manager.login(token, reportInitialSync)),
-      changeAccount: (token) =>
-        perform(() => manager.changeAccount(token, reportInitialSync)),
+      changeAccount: (token) => perform(async () => {
+        try { return await manager.changeAccount(token, reportInitialSync); }
+        catch (failure) {
+          if (failure instanceof PendingChangesError) Alert.alert('Saved changes would be removed',
+            'Switching accounts discards changes that are still saved for the current account on this device.', [
+              { text: 'Keep current account', style: 'cancel' },
+              { text: 'Discard and switch', style: 'destructive', onPress: () => {
+                void perform(() => manager.changeAccount(token, reportInitialSync, true));
+              } },
+            ]);
+          throw failure;
+        }
+      }),
       retryInitialSync: async () => {
         await retryCoordinatorRef.current?.retryNow();
       },
@@ -444,6 +487,19 @@ export function AuthProvider({
         try {
           await manager.logout();
           setStatus('unauthenticated');
+        } catch (failure) {
+          if (failure instanceof PendingChangesError) Alert.alert('Changes are still saved here',
+            'Upload your changes before signing out, or explicitly discard them from this device.', [
+              { text: 'Keep studying', style: 'cancel' },
+              { text: 'Sync then sign out', onPress: () => {
+                void manager.syncPendingChanges().then(() => manager.logout()).then(() => setStatus('unauthenticated'))
+                  .catch(() => setError('Your changes are still saved. Review saved changes or repair your API token before signing out.'));
+              } },
+              { text: 'Discard and sign out', style: 'destructive', onPress: () => {
+                void manager.logout(true).then(() => setStatus('unauthenticated')).catch(() => setError('Unable to sign out.'));
+              } },
+            ]);
+          else setError('Unable to sign out. Your saved changes were kept.');
         } finally {
           setBusy(false);
         }
@@ -458,6 +514,7 @@ export function AuthProvider({
       reportInitialSync,
       requiresAccountChange,
       status,
+      accountVersion,
     ],
   );
 

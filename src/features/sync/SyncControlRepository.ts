@@ -41,6 +41,11 @@ export class SyncControlRepository {
     return row.auth_state === 'active' ? contextOf(row) : null;
   }
 
+  async getLocalAccountContext(): Promise<AccountContext | null> {
+    const row = await this.read(this.db);
+    return row.auth_state === 'signed_out' ? null : contextOf(row);
+  }
+
   async getCredentialKey(): Promise<string | null> {
     const row = await this.read(this.db);
     return row.auth_state === 'active' ? row.active_credential_key : null;

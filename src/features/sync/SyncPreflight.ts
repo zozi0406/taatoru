@@ -11,7 +11,7 @@ export class SyncPreflight {
   constructor(private readonly db: Database, private readonly api: WaniKaniApi,
     private readonly context: AccountContext) {}
 
-  async run(mode: SyncMode = 'quick'): Promise<void> {
+  async run(mode: SyncMode = 'quick'): Promise<import('@/api/types').Resource<import('@/api/types').UserData, 'user'>> {
     const previous = (await this.db.first<{
       resets_updated_at: string | null; last_confirmed_reset_at: string | null;
     }>('SELECT resets_updated_at, last_confirmed_reset_at FROM sync_control WHERE id = 1'))!;
@@ -48,6 +48,9 @@ export class SyncPreflight {
         await tx.run('DELETE FROM review_statistics');
         await repository.replaceAssignments(assignments.data, assignments.data_updated_at);
         await repository.replaceReviewStatistics(statistics.data, statistics.data_updated_at);
+        // Subjects newly accessible after a reset are imported by the next phase.
+        // Replay their assignments/statistics after that import instead of skipping them.
+        await tx.run('UPDATE sync_state SET assignments_updated_at = NULL, review_statistics_updated_at = NULL WHERE id = 1');
         await tx.run(`UPDATE pending_progress SET delivery_state = 'uncertain', next_attempt_at = NULL`);
         for (const reset of newResets) {
           // Old prompts can carry attempts from the previous opportunity. Completed
@@ -61,5 +64,6 @@ export class SyncPreflight {
       await tx.run(`UPDATE sync_control SET resets_updated_at = ?, last_confirmed_reset_at = ? WHERE id = 1`,
       [resets.data_updated_at ?? previous.resets_updated_at, latest]);
     });
+    return user;
   }
 }

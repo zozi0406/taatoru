@@ -8,11 +8,12 @@ interface ProgressSource {
   readonly assignment: IdentifiedResource<AssignmentData, 'assignment'>;
   readonly statistic: IdentifiedResource<ReviewStatisticData, 'review_statistic'> | null;
   readonly level: number;
+  readonly resetAt: string | null;
 }
 
 /** Establish an opportunity from server state; transport success is not inferred. */
 export class WriteReconciler {
-  constructor(private readonly db: Database, private readonly api: WaniKaniApi) {}
+  constructor(private readonly db: Database, private readonly api: WaniKaniApi, private readonly maxLevelGranted?: number) {}
 
   async reconcileMaterial(operation: PendingMaterialOperation, signal?: AbortSignal): Promise<MaterialResolution> {
     if (operation.sourceJson === null || operation.operationKey === null)
@@ -65,13 +66,14 @@ export class WriteReconciler {
       return attention('invalid-baseline');
     const reset = await this.db.first(
       `SELECT id FROM sync_resets WHERE confirmed_at IS NOT NULL
-       AND julianday(confirmed_at) >= julianday(?) AND target_level <= ? LIMIT 1`, [operation.createdAt, source.level],
+       AND (? IS NULL OR julianday(confirmed_at) > julianday(?)) AND target_level <= ? LIMIT 1`,
+      [source.resetAt, source.resetAt, source.level],
     );
     // A reset is a new opportunity, even when the account has re-levelled already.
     if (reset !== null) return attention('account-reset');
     const subject = await this.db.first<{ hidden: number }>('SELECT hidden_at IS NOT NULL AS hidden FROM subjects WHERE id = ?', [operation.subjectId]);
     const user = await this.db.first<{ max_level_granted: number }>('SELECT max_level_granted FROM user LIMIT 1');
-    if (subject?.hidden || (user !== null && source.level > user.max_level_granted)) return attention('subject-unavailable');
+    if (subject?.hidden || source.level > (this.maxLevelGranted ?? user?.max_level_granted ?? 0)) return attention('subject-unavailable');
     let assignment: IdentifiedResource<AssignmentData, 'assignment'>;
     try { assignment = await this.api.getAssignment(operation.assignmentId, signal); }
     catch (error) {
@@ -128,7 +130,7 @@ function progressSource(json: string | null): ProgressSource | null {
   if (json === null) return null;
   try {
     const value = JSON.parse(json) as ProgressSource;
-    if (!Number.isInteger(value.level) || typeof value.assignment?.id !== 'number' ||
+    if (!Number.isInteger(value.level) || !('resetAt' in value) || typeof value.assignment?.id !== 'number' ||
         typeof value.assignment.data?.srs_stage !== 'number' || !('statistic' in value)) return null;
     return value;
   } catch { return null; }

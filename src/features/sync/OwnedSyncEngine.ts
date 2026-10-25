@@ -56,9 +56,9 @@ export class OwnedSyncEngine implements SyncEngine {
           };
         },
       });
-      await new SyncPreflight(db, api, options.context).run(mode);
+      const user = await new SyncPreflight(db, api, options.context).run(mode);
       const engine = new SynchronizationEngine({
-        api, repository: new SyncRepository(db, options.now), pendingWrites: new PendingWriteSender(db, api, ownedLease.ownerFence),
+        api, repository: new SyncRepository(db, options.now), pendingWrites: new PendingWriteSender(db, api, ownedLease.ownerFence, user.data.subscription.max_level_granted),
         isOnline: options.isOnline, now: options.now,
         invalidate: async () => { await check(); await options.invalidate(); },
         updateNotifications: async () => { await check(); await options.updateNotifications(); },

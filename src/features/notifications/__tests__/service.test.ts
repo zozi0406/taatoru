@@ -68,6 +68,17 @@ test('clears notifications and badges during vacation mode', async () => {
   expect(calls).toEqual(['channel', 'cancel', 'badge:0']);
 });
 
+test('an old-account notification rebuild stops after a suspended permission check', async () => {
+  const calls: string[] = []; const platform = fakePlatform(calls);
+  let current = true;
+  platform.getPermission = async () => { current = false; return true; };
+  await expect(new NotificationService(platform).rebuild({ alerts: true, badges: true,
+    currentReviewCount: 3, hourlyNewCounts: [2], now: new Date('2026-07-29T12:00:00Z'),
+    sound: false, vacationActive: false }, async () => { if (!current) throw new Error('stale account'); }))
+    .rejects.toThrow('stale account');
+  expect(calls).toEqual(['channel']);
+});
+
 function fakePlatform(calls: string[]): NotificationPlatform {
   return {
     cancelAll: jest.fn(async () => {

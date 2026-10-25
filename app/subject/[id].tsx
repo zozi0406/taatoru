@@ -12,6 +12,7 @@ import {
   type SubjectDetailsSnapshot,
 } from '@/features/subjects/subjectDetails';
 import { PendingWriteRepository } from '@/features/sync/PendingWriteRepository';
+import { TransactionDatabase } from '@/features/sync/SyncRepository';
 import { minimumTouchTarget } from '@/ui/theme/spacing';
 import { useTheme } from '@/ui/theme/ThemeProvider';
 
@@ -23,17 +24,22 @@ export default function SubjectDetailsRoute() {
   const subjectId = parseSubjectId(id);
   const [details, setDetails] = useState<SubjectDetailsSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [baselineJson, setBaselineJson] = useState<string>('null');
 
   useEffect(() => {
     let active = true;
     if (subjectId === null) {
       return;
     }
-    void loadSubjectDetails(services.db, subjectId, {
-      includeSimilarAboveLevel: false,
+    void services.db.transaction(async (tx) => {
+      const scoped = new TransactionDatabase(tx);
+      const loadedDetails = await loadSubjectDetails(scoped, subjectId, { includeSimilarAboveLevel: false });
+      const baseline = await scoped.first<{ id: number; resource_json: string }>('SELECT id, resource_json FROM study_materials WHERE subject_id = ?', [subjectId]);
+      return { loadedDetails, original: baseline !== null && baseline.id > 0 ? baseline.resource_json : 'null' };
     })
-      .then((loadedDetails) => {
+      .then(({ loadedDetails, original }) => {
         if (active) {
+          setBaselineJson(original);
           setDetails(loadedDetails);
         }
       })
@@ -65,10 +71,13 @@ export default function SubjectDetailsRoute() {
         subjectId,
         ...material,
         queuedAt: new Date(),
+        baselineJson,
       });
+      setBaselineJson(JSON.stringify({ data: { subject_id: subjectId, meaning_note: material.meaningNote,
+        reading_note: material.readingNote, meaning_synonyms: material.meaningSynonyms } }));
       services.notifyPendingWrites();
     },
-    [services.db, subjectId],
+    [services, subjectId, baselineJson],
   );
 
   if (details === null) {
