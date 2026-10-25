@@ -56,6 +56,31 @@ export type SyncTrigger = 'enqueue' | 'startup' | 'foreground' | 'reconnect'
   | 'manual' | 'credential-repair' | 'background';
 export type PendingDeliveryState = 'queued' | 'in_flight' | 'uncertain' | 'rejected';
 
+export interface PendingOperation {
+  readonly subjectId: number;
+  readonly operationKey: string | null;
+  readonly revision: number;
+  readonly accountEpoch: number;
+  readonly deliveryState: PendingDeliveryState;
+  readonly sourceJson: string | null;
+  readonly createdAt: string;
+  readonly wireCreatedAt: string | null;
+  readonly payloadJson: string;
+  readonly attemptCount: number;
+}
+
+export interface PendingProgressOperation extends PendingOperation {
+  readonly kind: ProgressOperationKind;
+  readonly assignmentId: number;
+  readonly incorrectMeaningAnswers: number;
+  readonly incorrectReadingAnswers: number;
+}
+
+export type OperationResolution =
+  | { readonly kind: 'acknowledged' | 'superseded'; readonly receipt: import('@/api/types').ProgressReceipt; readonly reason: string }
+  | { readonly kind: 'retry'; readonly wireCreatedAt: string }
+  | { readonly kind: 'attention'; readonly reason: string };
+
 export interface QueueSummary {
   /** Total across all states, including future retries. */
   readonly pending: number;

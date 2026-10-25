@@ -208,6 +208,7 @@ export class PendingWriteRepository {
       ) {
         return;
       }
+      if (existing !== null) throw new Error('Previous progress must be synchronized or resolved first');
       const progress = await currentProgress(tx, completion);
       const projection = projectSrsStage({
         kind,

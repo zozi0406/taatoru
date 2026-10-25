@@ -42,7 +42,8 @@ import { StudyMaterialRepository } from '@/db/repositories/StudyMaterialReposito
 import { SubjectRepository } from '@/db/repositories/SubjectRepository';
 import { mergeRecentMistakes } from './recentMistakes';
 import { SyncControlRepository } from './SyncControlRepository';
-import type { RecentMistake } from './types';
+import type { RecentMistake, PendingProgressOperation, OperationResolution } from './types';
+import { applyPendingState } from './PendingStateRepository';
 
 export interface SyncCursors {
   readonly assignments: string | null;
@@ -166,6 +167,29 @@ export class SyncRepository implements SyncDataRepository {
     this.reviewStatistics = new ReviewStatisticRepository(db);
     this.studyMaterials = new StudyMaterialRepository(db);
     this.subjects = new SubjectRepository(db);
+  }
+
+  async settleProgress(operation: PendingProgressOperation, resolution: Exclude<OperationResolution, { kind: 'retry' }>, now: Date): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      if (resolution.kind === 'attention') {
+        await tx.run(`UPDATE pending_progress SET delivery_state = 'rejected', last_error_kind = ?, next_attempt_at = NULL
+          WHERE operation_key IS ? AND revision = ?`, [resolution.reason, operation.operationKey, operation.revision]);
+        await tx.run(`UPDATE sync_dispatches SET delivery_state = 'rejected' WHERE operation_key IS ? AND revision = ?`,
+          [operation.operationKey, operation.revision]);
+        return;
+      }
+      await tx.run('DELETE FROM pending_progress WHERE operation_key = ? AND revision = ?', [operation.operationKey, operation.revision]);
+      const repository = new SyncRepository(new TransactionDatabase(tx));
+      const cursors = (await repository.getStateSnapshot()).cursors;
+      await repository.replaceAssignments([resolution.receipt.assignment], cursors.assignments);
+      if (resolution.receipt.reviewStatistic !== undefined)
+        await repository.replaceReviewStatistics([resolution.receipt.reviewStatistic], cursors.reviewStatistics);
+      await tx.run(`DELETE FROM sync_dispatches WHERE operation_key = ? AND revision = ?`, [operation.operationKey, operation.revision]);
+      await tx.run(`INSERT INTO sync_outcomes (account_epoch, operation_key, revision, outcome, reason, occurred_at)
+        VALUES (?, ?, ?, ?, ?, ?)`, [operation.accountEpoch, operation.operationKey, operation.revision, resolution.kind, resolution.reason, now.toISOString()]);
+      await tx.run('DELETE FROM sync_outcomes WHERE id NOT IN (SELECT id FROM sync_outcomes ORDER BY id DESC LIMIT 200)');
+      await applyPendingState(tx);
+    });
   }
 
   async getStateSnapshot(): Promise<SyncStateSnapshot> {

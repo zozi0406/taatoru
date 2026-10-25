@@ -241,7 +241,7 @@ test('successful progress delivery removes the pending row', async () => {
   }
 });
 
-test('HTTP 422 drops stale progress and continues with the next item', async () => {
+test('HTTP 422 retains rejected progress and continues with the next item', async () => {
   const db = await pendingDatabase([
     pendingReview(201, 501, '2026-07-29T11:40:00.000Z'),
     pendingReview(202, 502, '2026-07-29T11:50:00.000Z'),
@@ -249,7 +249,7 @@ test('HTTP 422 drops stale progress and continues with the next item', async () 
   const api = writeApi();
   api.createReview
     .mockRejectedValueOnce(new ApiError('invalid assignment', { status: 422 }))
-    .mockResolvedValueOnce({ assignment: assignmentFixture });
+    .mockResolvedValueOnce({ assignment: { ...assignmentFixture, id: 502, data: { ...assignmentFixture.data, subject_id: 202 } } });
   try {
     await new PendingWriteSender(db, api).sendSelectedPendingWrites(
       { progressIds: [201, 202], studyMaterialIds: [] },
@@ -257,7 +257,8 @@ test('HTTP 422 drops stale progress and continues with the next item', async () 
     );
 
     expect(api.createReview).toHaveBeenCalledTimes(2);
-    expect(await pendingProgressCount(db)).toBe(0);
+    expect(await pendingProgressCount(db)).toBe(1);
+    expect(await db.first('SELECT subject_id, delivery_state FROM pending_progress')).toEqual({ subject_id: 201, delivery_state: 'rejected' });
   } finally {
     await db.close();
   }
@@ -310,7 +311,8 @@ test('progress sends sequentially in creation order', async () => {
   const api = writeApi();
   api.createReview.mockImplementation(async ({ assignmentId }) => {
     events.push(assignmentId ?? -1);
-    return { assignment: { ...assignmentFixture, id: assignmentId ?? 501 } };
+    return { assignment: { ...assignmentFixture, id: assignmentId ?? 501,
+      data: { ...assignmentFixture.data, subject_id: (assignmentId ?? 501) - 300 } } };
   });
   try {
     await new PendingWriteSender(db, api).sendSelectedPendingWrites(
@@ -324,7 +326,7 @@ test('progress sends sequentially in creation order', async () => {
   }
 });
 
-test('old reviews include createdAt while recent reviews omit it', async () => {
+test('both old and recent reviews include their fixed createdAt', async () => {
   const db = await pendingDatabase([
     pendingReview(201, 501, '2026-07-29T11:44:59.999Z'),
     pendingReview(202, 502, '2026-07-29T11:45:00.000Z'),
@@ -344,6 +346,7 @@ test('old reviews include createdAt while recent reviews omit it', async () => {
       assignmentId: 502,
       incorrectMeaningAnswers: 1,
       incorrectReadingAnswers: 0,
+      createdAt: new Date('2026-07-29T11:45:00.000Z'),
     });
   } finally {
     await db.close();
@@ -426,15 +429,13 @@ async function pendingDatabase(
 ): Promise<NodeTestDatabase> {
   const db = await NodeTestDatabase.open();
   await migrateDatabase(db);
+  await new ResourceRepository(db).replaceUser(userFixture);
   for (const row of rows) {
-    await db.run(
-      `INSERT INTO pending_progress (
-        subject_id, assignment_id, operation_kind,
-        incorrect_meaning_answers, incorrect_reading_answers,
-        created_at, payload_json
-      ) VALUES (?, ?, 'review', 1, 0, ?, '{}')`,
-      [row.subjectId, row.assignmentId, row.createdAt],
-    );
+    await new SubjectRepository(db).replaceSubjects([{ ...kanjiFixture, id: row.subjectId }], null);
+    await new AssignmentRepository(db).replaceAssignments([{ ...assignmentFixture, id: row.assignmentId,
+      data: { ...assignmentFixture.data, subject_id: row.subjectId, available_at: '2026-07-29T11:00:00.000Z' } }], null);
+    await new PendingWriteRepository(db).completeReview({ ...row, completedAt: new Date(row.createdAt),
+      incorrectMeaningAnswers: 1, incorrectReadingAnswers: 0 });
   }
   return db;
 }
@@ -449,8 +450,15 @@ async function pendingProgressCount(db: NodeTestDatabase): Promise<number> {
 
 function writeApi() {
   return {
-    startAssignment: jest.fn<Promise<void>, [Parameters<WaniKaniApi['startAssignment']>[0]]>(),
-    createReview: jest.fn<Promise<void>, [Parameters<WaniKaniApi['createReview']>[0]]>(),
+    rateLimit: { estimatedClockSkewMs: 0 },
+    getAssignment: jest.fn(async (id: number) => ({ ...assignmentFixture, id,
+      data: { ...assignmentFixture.data, subject_id: id - 300, available_at: '2026-07-29T11:00:00.000Z' } })),
+    findReviewStatistic: jest.fn(async () => null),
+    startAssignment: jest.fn(async () => ({ assignment: assignmentFixture })),
+    createReview: jest.fn(async (input: Parameters<WaniKaniApi['createReview']>[0]) => ({ assignment: {
+      ...assignmentFixture, id: input.assignmentId ?? 501,
+      data: { ...assignmentFixture.data, subject_id: (input.assignmentId ?? 501) - 300 },
+    } })),
     upsertStudyMaterial: jest.fn<
       Promise<void>,
       [Parameters<WaniKaniApi['upsertStudyMaterial']>[0]]

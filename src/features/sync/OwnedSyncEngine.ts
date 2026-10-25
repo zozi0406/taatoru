@@ -58,7 +58,7 @@ export class OwnedSyncEngine implements SyncEngine {
       });
       await new SyncPreflight(db, api, options.context).run(mode);
       const engine = new SynchronizationEngine({
-        api, repository: new SyncRepository(db), pendingWrites: new PendingWriteSender(db, api),
+        api, repository: new SyncRepository(db), pendingWrites: new PendingWriteSender(db, api, ownedLease.ownerFence),
         isOnline: options.isOnline, now: options.now,
         invalidate: async () => { await check(); await options.invalidate(); },
         updateNotifications: async () => { await check(); await options.updateNotifications(); },
