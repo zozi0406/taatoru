@@ -24,7 +24,7 @@ import { useTheme } from '@/ui/theme/ThemeProvider';
 
 export default function LessonSessionRoute() {
   const router = useRouter();
-  const { db } = useAppServices();
+  const { db, notifyPendingWrites } = useAppServices();
   const theme = useTheme();
   const sessions = useMemo(() => new SessionRepository(db), [db]);
   const [snapshot, setSnapshot] = useState<LessonSessionSnapshot | null>(null);
@@ -112,6 +112,7 @@ export default function LessonSessionRoute() {
         onSettings={() => setSettingsOpen(true)}
         onAddSynonym={async (subjectId, synonym) => {
           await addStudySynonym(db, subjectId, synonym);
+          notifyPendingWrites();
           setMaterials(
             await loadStudyMaterials(
               db,
@@ -126,7 +127,7 @@ export default function LessonSessionRoute() {
               transition.completedItem,
               transition.snapshot,
             )
-            .then(() => undefined)
+            .then(() => { notifyPendingWrites(); })
         }
         onExit={() => router.replace('/')}
         onFinish={async () => {

@@ -3,6 +3,8 @@ import * as Network from 'expo-network';
 import * as TaskManager from 'expo-task-manager';
 
 import { HttpWaniKaniApi } from '@/api/HttpWaniKaniApi';
+import { RequestScheduler } from '@/api/RequestScheduler';
+import { SyncCoordinator } from '@/features/sync/SyncCoordinator';
 import { ExpoDatabase } from '@/db/ExpoDatabase';
 import { migrateDatabase } from '@/db/migrate';
 import { SecureTokenStore } from '@/features/auth/tokenStore';
@@ -44,8 +46,14 @@ export async function runBackgroundQuickSync(): Promise<boolean> {
     const notificationService = new NotificationService(
       new ExpoNotificationPlatform(),
     );
+    const deadlineAt = Date.now() + 20_000;
     const engine = new OwnedSyncEngine({
-      db, context, apiFactory: () => new HttpWaniKaniApi({ token }),
+      db, context, apiFactory: (lease, signal) => {
+        const scheduler = new RequestScheduler(db, { deadlineAt });
+        return new HttpWaniKaniApi({ token, signal,
+          schedule: (operation, requestSignal) => scheduler.run(operation, lease, requestSignal),
+          onRateLimit: (budget) => scheduler.recordBudget(budget, lease) });
+      },
       isOnline: async () => {
         const network = await Network.getNetworkStateAsync();
         return (
@@ -63,7 +71,12 @@ export async function runBackgroundQuickSync(): Promise<boolean> {
       },
       now: () => new Date(),
     });
-    return (await engine.synchronize('quick')).status !== 'failed';
+    const coordinator = new SyncCoordinator({ db, context, engine });
+    coordinator.setForeground(false);
+    try {
+      const result = await coordinator.request('background');
+      return result.status !== 'failed' || result.error.retryAt !== null;
+    } finally { coordinator.dispose(); }
   } finally {
     await db.close();
   }

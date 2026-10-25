@@ -106,9 +106,9 @@ export class PendingWriteSender {
       await this.db.run(
         `UPDATE pending_progress
          SET attempt_count = attempt_count + 1,
-             last_error_at = ?, delivery_state = ?, last_error_kind = 'delivery-interrupted'
+             last_error_at = ?, delivery_state = ?, last_error_kind = 'delivery-interrupted', next_attempt_at = ?
          WHERE operation_key = ? AND revision = ?`,
-        [now.toISOString(), state, progress.operationKey, progress.revision],
+        [now.toISOString(), state, retryAt(progress.attemptCount, now, error), progress.operationKey, progress.revision],
       );
       await this.db.run(`UPDATE sync_dispatches SET delivery_state = ? WHERE operation_key = ? AND revision = ?`,
         [state, progress.operationKey, progress.revision]);
@@ -172,8 +172,8 @@ export class PendingWriteSender {
       const rejected = error instanceof ApiError && error.status === 422;
       const state = rejected ? 'rejected' : error instanceof ApiError && [401, 403, 404, 429].includes(error.status ?? 0) ? 'queued' : 'uncertain';
       await this.db.run(`UPDATE pending_study_materials SET delivery_state = ?, attempt_count = attempt_count + 1,
-        last_error_kind = ?, next_attempt_at = NULL WHERE operation_key = ? AND revision = ?`,
-      [state, rejected ? 'validation-rejected' : 'delivery-interrupted', material.operationKey, prepared.revision]);
+        last_error_kind = ?, next_attempt_at = ? WHERE operation_key = ? AND revision = ?`,
+      [state, rejected ? 'validation-rejected' : 'delivery-interrupted', rejected ? null : retryAt(material.attemptCount, now, error), material.operationKey, prepared.revision]);
       await this.db.run('UPDATE sync_dispatches SET delivery_state = ? WHERE operation_key = ? AND revision = ?',
         [state, material.operationKey, prepared.revision]);
       if (!rejected) throw error;
@@ -232,4 +232,9 @@ export class PendingWriteSender {
 
 function placeholders(count: number): string {
   return Array.from({ length: count }, () => '?').join(', ');
+}
+
+function retryAt(attempt: number, now: Date, error: unknown): string {
+  const delay = Math.min(60_000, 2_000 * 2 ** Math.min(attempt, 5)) * (1 + Math.random() * .2);
+  return new Date(Math.max(now.getTime() + delay, error instanceof ApiError ? error.retryAt?.getTime() ?? 0 : 0)).toISOString();
 }

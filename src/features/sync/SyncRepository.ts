@@ -42,7 +42,7 @@ import { StudyMaterialRepository } from '@/db/repositories/StudyMaterialReposito
 import { SubjectRepository } from '@/db/repositories/SubjectRepository';
 import { mergeRecentMistakes } from './recentMistakes';
 import { SyncControlRepository } from './SyncControlRepository';
-import type { RecentMistake, PendingProgressOperation, OperationResolution, PendingMaterialOperation } from './types';
+import type { RecentMistake, PendingProgressOperation, OperationResolution, PendingMaterialOperation, QueueSummary } from './types';
 import type { MaterialReceipt } from '@/api/types';
 import { applyPendingState } from './PendingStateRepository';
 
@@ -162,12 +162,30 @@ export class SyncRepository implements SyncDataRepository {
   private readonly studyMaterials: StudyMaterialRepository;
   private readonly subjects: SubjectRepository;
 
-  constructor(private readonly db: Database) {
+  constructor(private readonly db: Database, private readonly now: () => Date = () => new Date()) {
     this.assignments = new AssignmentRepository(db);
     this.resources = new ResourceRepository(db);
     this.reviewStatistics = new ReviewStatisticRepository(db);
     this.studyMaterials = new StudyMaterialRepository(db);
     this.subjects = new SubjectRepository(db);
+  }
+
+  async getQueueSummary(): Promise<QueueSummary> {
+    const row = (await this.db.first<{ pending: number; uncertain: number; rejected: number; nextAttemptAt: string | null }>(
+      `WITH pending AS (
+        SELECT delivery_state, next_attempt_at FROM pending_progress UNION ALL
+        SELECT delivery_state, next_attempt_at FROM pending_study_materials
+      ) SELECT COUNT(*) AS pending,
+        COALESCE(SUM(delivery_state IN ('uncertain', 'in_flight')), 0) AS uncertain,
+        COALESCE(SUM(delivery_state = 'rejected'), 0) AS rejected,
+        MIN(CASE WHEN delivery_state != 'rejected' THEN COALESCE(next_attempt_at, ?) END) AS nextAttemptAt FROM pending`,
+      [this.now().toISOString()],
+    ))!;
+    const orphan = (await this.db.first<{ n: number }>(`SELECT COUNT(DISTINCT subject_id) AS n FROM sync_dispatches d
+      WHERE queue_kind = 'material' AND NOT EXISTS (SELECT 1 FROM pending_study_materials p WHERE p.operation_key = d.operation_key)`))!.n;
+    const control = (await this.db.first<{ blocked_until: number }>('SELECT blocked_until FROM sync_control WHERE id = 1'))!;
+    return { ...row, pending: row.pending + orphan, uncertain: row.uncertain + orphan,
+      nextAttemptAt: row.nextAttemptAt === null ? null : new Date(Math.max(Date.parse(row.nextAttemptAt), control.blocked_until)).toISOString() };
   }
 
   async settleProgress(operation: PendingProgressOperation, resolution: Exclude<OperationResolution, { kind: 'retry' }>, now: Date): Promise<void> {
@@ -238,12 +256,16 @@ export class SyncRepository implements SyncDataRepository {
     const progress = await this.db.all<SubjectIdRow>(
       `SELECT subject_id AS subjectId
        FROM pending_progress
+       WHERE delivery_state IN ('queued', 'uncertain') AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
        ORDER BY created_at, subject_id`,
+      [this.now().toISOString()],
     );
     const studyMaterials = await this.db.all<SubjectIdRow>(
       `SELECT subject_id AS subjectId
        FROM pending_study_materials
+       WHERE delivery_state IN ('queued', 'uncertain') AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
        ORDER BY created_at, subject_id`,
+      [this.now().toISOString()],
     );
 
     return {

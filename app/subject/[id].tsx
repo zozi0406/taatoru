@@ -66,6 +66,7 @@ export default function SubjectDetailsRoute() {
         ...material,
         queuedAt: new Date(),
       });
+      services.notifyPendingWrites();
     },
     [services.db, subjectId],
   );

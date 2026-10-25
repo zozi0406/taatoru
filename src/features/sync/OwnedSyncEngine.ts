@@ -58,7 +58,7 @@ export class OwnedSyncEngine implements SyncEngine {
       });
       await new SyncPreflight(db, api, options.context).run(mode);
       const engine = new SynchronizationEngine({
-        api, repository: new SyncRepository(db), pendingWrites: new PendingWriteSender(db, api, ownedLease.ownerFence),
+        api, repository: new SyncRepository(db, options.now), pendingWrites: new PendingWriteSender(db, api, ownedLease.ownerFence),
         isOnline: options.isOnline, now: options.now,
         invalidate: async () => { await check(); await options.invalidate(); },
         updateNotifications: async () => { await check(); await options.updateNotifications(); },
@@ -68,8 +68,11 @@ export class OwnedSyncEngine implements SyncEngine {
       });
       const result = await engine.synchronize(mode);
       await check();
-      this.store.setState(engine.store.getState());
-      return result;
+      const queue = await new SyncRepository(db, options.now).getQueueSummary();
+      const complete = { ...result, queue, delivery: queue.pending === 0 ? 'complete' as const :
+        queue.rejected > 0 || (queue.uncertain > 0 && queue.nextAttemptAt === null) ? 'attention' as const : 'pending' as const };
+      this.store.setState({ ...engine.store.getState(), lastResult: complete });
+      return complete;
     } catch (error) {
       if (!(error instanceof StaleSyncError))
         return { status: 'failed', error: toSafeSyncError(error) };

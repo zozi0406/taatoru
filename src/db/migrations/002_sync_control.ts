@@ -17,6 +17,7 @@ export const MIGRATION_2_STATEMENTS: readonly string[] = [
     last_confirmed_reset_at TEXT,
     next_request_at INTEGER NOT NULL DEFAULT 0,
     blocked_until INTEGER NOT NULL DEFAULT 0,
+    retry_count INTEGER NOT NULL DEFAULT 0,
     budget_remaining INTEGER,
     budget_reset_at INTEGER NOT NULL DEFAULT 0
   )`,

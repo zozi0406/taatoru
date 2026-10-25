@@ -25,7 +25,7 @@ import { useTheme } from '@/ui/theme/ThemeProvider';
 
 export default function ReviewSessionRoute() {
   const router = useRouter();
-  const { db } = useAppServices();
+  const { db, notifyPendingWrites } = useAppServices();
   const theme = useTheme();
   const repository = useMemo(() => new ReviewSessionRepository(db), [db]);
   const [snapshot, setSnapshot] = useState<ReviewSessionSnapshot | null>(null);
@@ -144,6 +144,7 @@ export default function ReviewSessionRoute() {
         }}
         onAddSynonym={async (subjectId, synonym) => {
           await addStudySynonym(db, subjectId, synonym);
+          notifyPendingWrites();
           setMaterials(
             await loadStudyMaterials(
               db,
@@ -156,6 +157,7 @@ export default function ReviewSessionRoute() {
             transition.completedItem,
             transition.snapshot,
           );
+          notifyPendingWrites();
         }}
         onExit={() => router.replace('/')}
         onFinish={async () => {

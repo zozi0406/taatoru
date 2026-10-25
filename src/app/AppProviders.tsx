@@ -26,7 +26,9 @@ import {
   useAuth,
 } from '@/features/auth/AuthProvider';
 import { SecureTokenStore, type TokenStore } from '@/features/auth/tokenStore';
-import { ConnectivityUploadRetry } from '@/features/connectivity/ConnectivityUploadRetry';
+import { observeConnectivity } from '@/features/connectivity/observeConnectivity';
+import { RequestScheduler } from '@/api/RequestScheduler';
+import { SyncCoordinator } from '@/features/sync/SyncCoordinator';
 import { OwnedSyncEngine } from '@/features/sync/OwnedSyncEngine';
 import { SyncControlRepository } from '@/features/sync/SyncControlRepository';
 import type { AccountContext } from '@/features/sync/types';
@@ -51,6 +53,8 @@ export interface AppServices {
   readonly isOnline: () => Promise<boolean>;
   readonly rebuildNotifications: () => Promise<void>;
   readonly synchronize: (mode: SyncMode) => Promise<SyncResult>;
+  readonly notifyPendingWrites: () => void;
+  readonly setForeground: (active: boolean) => void;
 }
 
 const AppServicesContext = createContext<AppServices | null>(null);
@@ -64,6 +68,7 @@ export function AppProviders({ children }: PropsWithChildren) {
   useEffect(() => {
     let active = true;
     let database: Database | null = null;
+    let disposeRuntime = () => {};
     void (async () => {
       try {
         const openedDatabase = await ExpoDatabase.open();
@@ -96,17 +101,33 @@ export function AppProviders({ children }: PropsWithChildren) {
           }
         };
         const control = new SyncControlRepository(openedDatabase);
-        const createSyncEngine = (token: string, context: AccountContext): SyncEngine =>
-          new OwnedSyncEngine({
+        let runtimeToken: string | null = null;
+        let runtimeSyncEngine: SyncCoordinator | null = null;
+        let runtimeContextKey: string | null = null;
+        disposeRuntime = () => runtimeSyncEngine?.dispose();
+        const createSyncEngine = (token: string, context: AccountContext): SyncEngine => {
+          const contextKey = `${context.accountEpoch}:${context.credentialRevision}`;
+          if (runtimeSyncEngine !== null && runtimeToken === token && runtimeContextKey === contextKey) return runtimeSyncEngine;
+          runtimeSyncEngine?.dispose();
+          const engine = new OwnedSyncEngine({
             db: openedDatabase, context,
-            apiFactory: () => new HttpWaniKaniApi({ token }),
+            apiFactory: (lease, signal) => {
+              const scheduler = new RequestScheduler(openedDatabase);
+              return new HttpWaniKaniApi({ token, signal,
+                schedule: (operation, requestSignal) => scheduler.run(operation, lease, requestSignal),
+                onRateLimit: (budget) => scheduler.recordBudget(budget, lease),
+              });
+            },
             isOnline, invalidate: () => {},
             updateNotifications: rebuildNotifications,
             now: () => new Date(),
           });
-        let runtimeToken: string | null = null;
-        let runtimeSyncEngine: SyncEngine | null = null;
-        let runtimeContextKey: string | null = null;
+          runtimeSyncEngine = new SyncCoordinator({ db: openedDatabase, context, engine });
+          // AuthProvider owns initial-setup retry timing until the account opens.
+          runtimeSyncEngine.setForeground(false);
+          runtimeToken = token; runtimeContextKey = contextKey;
+          return runtimeSyncEngine;
+        };
         const synchronize = async (mode: SyncMode): Promise<SyncResult> => {
           const token = await tokenStore.get();
           const context = await control.getAccountContext();
@@ -123,13 +144,7 @@ export function AppProviders({ children }: PropsWithChildren) {
               },
             };
           }
-          const contextKey = `${context.accountEpoch}:${context.credentialRevision}`;
-          if (runtimeSyncEngine === null || runtimeToken !== token || runtimeContextKey !== contextKey) {
-            runtimeToken = token;
-            runtimeContextKey = contextKey;
-            runtimeSyncEngine = createSyncEngine(token, context);
-          }
-          return runtimeSyncEngine.synchronize(mode);
+          return createSyncEngine(token, context).synchronize(mode);
         };
         void registerReviewBackgroundTask().catch(() => {
           // Background execution is opportunistic and may be unavailable.
@@ -137,7 +152,14 @@ export function AppProviders({ children }: PropsWithChildren) {
         const manager = new AuthManager({
           db: openedDatabase,
           tokenStore,
-          apiFactory: (token) => new HttpWaniKaniApi({ token }),
+          apiFactory: (token, reservation) => {
+            if (reservation === undefined) throw new Error('Missing credential reservation');
+            const scheduler = new RequestScheduler(openedDatabase);
+            return new HttpWaniKaniApi({ token,
+              schedule: (operation, signal) => scheduler.run(operation, reservation, signal),
+              onRateLimit: (budget) => scheduler.recordBudget(budget, reservation),
+            });
+          },
           syncFactory: createSyncEngine,
           clearAccount: () => syncRepository.clearForLogout(),
         });
@@ -149,6 +171,8 @@ export function AppProviders({ children }: PropsWithChildren) {
             isOnline,
             rebuildNotifications,
             synchronize,
+            notifyPendingWrites: () => runtimeSyncEngine?.notifyPendingWrites(),
+            setForeground: (value) => runtimeSyncEngine?.setForeground(value),
           });
         }
       } catch (bootstrapError) {
@@ -168,6 +192,7 @@ export function AppProviders({ children }: PropsWithChildren) {
 
     return () => {
       active = false;
+      disposeRuntime();
       if (database !== null) {
         const closingDatabase = database;
         database = null;
@@ -182,10 +207,12 @@ export function AppProviders({ children }: PropsWithChildren) {
     }
     const subscription = AppState.addEventListener('change', (state) => {
       if (state === 'background') {
+        services.setForeground(false);
         void services.rebuildNotifications().catch(() => {
           // Notification refresh should not block the app entering background.
         });
       }
+      if (state === 'active') services.setForeground(true);
     });
     return () => {
       subscription.remove();
@@ -261,14 +288,18 @@ function AuthenticatedRuntime({
   services,
 }: PropsWithChildren<{ readonly services: AppServices }>) {
   const auth = useAuth();
+  useEffect(() => {
+    if (auth.status !== 'authenticated') { services.setForeground(false); return; }
+    services.setForeground(AppState.currentState !== 'background' && AppState.currentState !== 'inactive');
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const subscription = observeConnectivity((connected) => {
+      if (timer !== undefined) clearTimeout(timer);
+      if (connected) timer = setTimeout(() => { void services.synchronize('quick'); }, 2_000);
+    });
+    return () => { subscription.remove(); if (timer !== undefined) clearTimeout(timer); services.setForeground(false); };
+  }, [auth.status, services]);
   return (
     <>
-      {auth.status === 'authenticated' ? (
-        <ConnectivityUploadRetry
-          db={services.db}
-          synchronize={services.synchronize}
-        />
-      ) : null}
       {children}
     </>
   );

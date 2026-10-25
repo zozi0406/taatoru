@@ -60,6 +60,9 @@ interface HttpWaniKaniApiOptions {
   readonly fetch?: Fetch;
   readonly baseUrl?: string;
   readonly now?: () => number;
+  readonly schedule?: <T>(operation: (signal: AbortSignal) => Promise<T>, signal?: AbortSignal) => Promise<T>;
+  readonly onRateLimit?: (budget: RateLimitSnapshot) => Promise<void>;
+  readonly signal?: AbortSignal;
 }
 
 export class HttpWaniKaniApi implements WaniKaniApi {
@@ -68,18 +71,21 @@ export class HttpWaniKaniApi implements WaniKaniApi {
   private readonly baseUrl: string;
   private readonly now: () => number;
   private readonly rateLimitTracker: RateLimitTracker;
+  private readonly scheduling: Pick<HttpWaniKaniApiOptions, 'schedule' | 'onRateLimit' | 'signal'>;
 
   constructor({
     token,
     fetch = globalThis.fetch.bind(globalThis),
     baseUrl = DEFAULT_BASE_URL,
     now = Date.now,
+    schedule, onRateLimit, signal,
   }: HttpWaniKaniApiOptions) {
     this.token = token;
     this.fetch = fetch;
     this.baseUrl = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
     this.now = now;
     this.rateLimitTracker = new RateLimitTracker(now);
+    this.scheduling = { schedule, onRateLimit, signal };
   }
 
   get rateLimit(): RateLimitSnapshot {
@@ -333,6 +339,12 @@ export class HttpWaniKaniApi implements WaniKaniApi {
     url: string,
     init: RequestInit,
   ): Promise<{ readonly body: unknown; readonly status: number }> {
+    if (this.scheduling.schedule !== undefined) return this.scheduling.schedule(
+      (signal) => this.performRequestJson(url, { ...init, signal }), init.signal ?? this.scheduling.signal);
+    return this.performRequestJson(url, init);
+  }
+
+  private async performRequestJson(url: string, init: RequestInit): Promise<{ readonly body: unknown; readonly status: number }> {
     const response = await this.request(url, init);
     try {
       return {
@@ -383,6 +395,7 @@ export class HttpWaniKaniApi implements WaniKaniApi {
       requestStartedAtMs,
       responseReceivedAtMs,
     });
+    await this.scheduling.onRateLimit?.(this.rateLimit);
 
     if (response.status === 200 || response.status === 201) {
       return response;

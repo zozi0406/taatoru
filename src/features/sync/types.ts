@@ -1,12 +1,3 @@
-export interface PendingWriteBudget {
-  readonly requestsRemaining: number;
-  readonly assignmentUnits: number;
-  readonly subjectUnits: number;
-  readonly fixedUnits: number;
-  readonly progressIds: readonly number[];
-  readonly studyMaterialIds: readonly number[];
-}
-
 export interface SelectedPendingWrites {
   readonly progressIds: readonly number[];
   readonly studyMaterialIds: readonly number[];

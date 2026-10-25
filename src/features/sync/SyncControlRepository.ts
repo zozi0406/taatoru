@@ -163,9 +163,9 @@ export class SyncControlRepository {
         row.lease_until <= now || now < row.lease_started_at) throw new StaleSyncError();
   }
 
-  async assertRequest(context: RequestContext, now: number): Promise<void> {
-    if ('ownerFence' in context) await this.assertLease(this.db, context, now);
-    else await this.assertReservation(this.db, context);
+  async assertRequest(tx: DatabaseTransaction, context: RequestContext, now: number): Promise<void> {
+    if ('ownerFence' in context) await this.assertLease(tx, context, now);
+    else await this.assertReservation(tx, context);
   }
 
   async allocateOperationKey(tx: DatabaseTransaction, accountEpoch: number): Promise<string> {
