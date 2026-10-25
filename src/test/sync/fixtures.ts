@@ -22,4 +22,3 @@ export async function syncDatabase(): Promise<NodeTestDatabase> {
   await new SyncRepository(db).replaceFullRefresh(syncResources(), SYNC_NOW);
   return db;
 }
-
