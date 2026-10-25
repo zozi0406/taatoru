@@ -16,6 +16,8 @@ import {
   useState,
 } from 'react';
 import type { TokenStore } from './tokenStore';
+import { SyncControlRepository } from '@/features/sync/SyncControlRepository';
+import type { AccountContext, CredentialReservation } from '@/features/sync/types';
 
 export class EmptyTokenError extends Error {
   constructor() {
@@ -40,6 +42,10 @@ export class AccountChangeRequiredError extends Error {
   }
 }
 
+export class PendingChangesError extends Error {
+  constructor() { super('Changes are still waiting to upload. Sync first or explicitly discard them before signing out.'); }
+}
+
 export class InitialSyncError extends Error {
   constructor(
     readonly setupStatus: 'connection-issues' | 'attention',
@@ -54,8 +60,8 @@ export class InitialSyncError extends Error {
 interface AuthManagerOptions {
   readonly db: Database;
   readonly tokenStore: TokenStore;
-  readonly apiFactory: (token: string) => WaniKaniApi;
-  readonly syncFactory: (api: WaniKaniApi) => SyncEngine;
+  readonly apiFactory: (token: string, reservation?: CredentialReservation) => WaniKaniApi;
+  readonly syncFactory: (token: string, context: AccountContext) => SyncEngine;
   readonly clearAccount: () => Promise<void>;
 }
 
@@ -74,59 +80,60 @@ type InitialSyncReporter = (state: InitialSyncState) => void;
 export class AuthManager {
   constructor(private readonly options: AuthManagerOptions) {}
 
-  async login(
-    tokenValue: string,
-    report?: InitialSyncReporter,
-  ): Promise<Resource<UserData, 'user'>> {
-    const { token, api, user } = await this.validate(tokenValue);
-    const cached = await this.cachedAccount();
-    if (cached !== null && cached.user.data.id !== user.data.id) {
-      throw new AccountChangeRequiredError();
-    }
-
-    if (cached === null || !cached.synchronized) {
-      report?.(runningInitialSync('account-connected'));
-      await this.options.tokenStore.setPending(token);
-      await this.initialSync(api, user.data.id, report);
-    } else {
-      await this.opportunisticSync(api);
-    }
-    await this.options.tokenStore.set(token);
-    await this.options.tokenStore.removePending();
-    return user;
+  login(tokenValue: string, report?: InitialSyncReporter): Promise<Resource<UserData, 'user'>> {
+    return this.connect(tokenValue, false, report);
   }
 
-  async changeAccount(
-    tokenValue: string,
-    report?: InitialSyncReporter,
-  ): Promise<Resource<UserData, 'user'>> {
-    const { token, api, user } = await this.validate(tokenValue);
-    await this.options.clearAccount();
-    await this.options.tokenStore.remove();
-    await this.options.tokenStore.setPending(token);
-    report?.(runningInitialSync('account-connected'));
-    await this.initialSync(api, user.data.id, report);
-    await this.options.tokenStore.set(token);
-    await this.options.tokenStore.removePending();
-    return user;
+  changeAccount(tokenValue: string, report?: InitialSyncReporter): Promise<Resource<UserData, 'user'>> {
+    return this.connect(tokenValue, true, report);
   }
 
   async resume(token: string): Promise<Resource<UserData, 'user'>> {
     const cached = await this.cachedAccount();
-    if (cached === null || !cached.synchronized) {
-      return this.login(token);
-    }
-    const normalizedToken = token.trim();
-    if (normalizedToken.length === 0) {
-      throw new EmptyTokenError();
-    }
-    void this.options
-      .syncFactory(this.options.apiFactory(normalizedToken))
-      .synchronize('quick')
-      .catch(() => {
-        // Cached access remains available when opportunistic refresh fails.
-      });
+    if (cached === null || !cached.synchronized) return this.login(token);
+    if (token.trim().length === 0) throw new EmptyTokenError();
+    const context = await new SyncControlRepository(this.options.db).getAccountContext();
+    // A legacy cache remains readable offline; credentials must be bound before uploads.
+    if (context === null) void this.login(token).catch(() => {});
+    else void this.opportunisticSync(token, context);
     return cached.user;
+  }
+
+  private async connect(
+    tokenValue: string, replace: boolean, report?: InitialSyncReporter,
+  ): Promise<Resource<UserData, 'user'>> {
+    const token = tokenValue.trim();
+    if (token.length === 0) throw new EmptyTokenError();
+    const control = new SyncControlRepository(this.options.db);
+    const reservation = await control.beginCredentialTransition();
+    let activated = false;
+    try {
+      await this.options.tokenStore.setCredential(reservation.credentialKey, token);
+      await control.assertReservation(this.options.db, reservation);
+      const user = await this.options.apiFactory(token, reservation).getUser();
+      await control.assertReservation(this.options.db, reservation);
+      const cached = await this.cachedAccount();
+      if (!replace && cached !== null && cached.user.data.id !== user.data.id)
+        throw new AccountChangeRequiredError();
+      const context = await control.activateCredentials(reservation, user.data.id, replace);
+      activated = true;
+      if (cached === null || !cached.synchronized || cached.user.data.id !== user.data.id) {
+        report?.(runningInitialSync('account-connected'));
+        await this.initialSync(token, context, report);
+      } else await this.opportunisticSync(token, context);
+      await control.assertAccount(this.options.db, context);
+      // Versioned slots are authoritative. These only remove legacy bootstrap keys.
+      await this.options.tokenStore.remove();
+      await this.options.tokenStore.removePending();
+      return user;
+    } catch (error) {
+      if (!activated) {
+        await control.cancelCredentialTransition(reservation);
+        await this.options.tokenStore.removeCredential(reservation.credentialKey);
+      }
+      if (error instanceof ApiError && error.status === 401) throw new InvalidTokenError();
+      throw error;
+    }
   }
 
   async continueInterruptedSetup(
@@ -144,15 +151,27 @@ export class AuthManager {
   }
 
   async useAnotherApiKey(): Promise<void> {
-    await this.options.clearAccount();
-    await this.options.tokenStore.remove();
-    await this.options.tokenStore.removePending();
+    await this.removeAccount();
   }
 
-  async logout(): Promise<void> {
+  async logout(discardPending = false): Promise<void> {
+    const row = await this.options.db.first<{ count: number }>(`SELECT
+      (SELECT COUNT(*) FROM pending_progress) +
+      (SELECT COUNT(*) FROM pending_study_materials) AS count`);
+    if (!discardPending && (row?.count ?? 0) > 0) throw new PendingChangesError();
+    await this.removeAccount();
+  }
+
+  private async removeAccount(): Promise<void> {
+    const row = await this.options.db.first<{
+      active_credential_key: string | null; pending_credential_key: string | null;
+    }>('SELECT active_credential_key, pending_credential_key FROM sync_control WHERE id = 1');
+    // Invalidate the pointers/fences before awaiting any external credential deletion.
+    await this.options.clearAccount();
+    for (const key of [row?.active_credential_key, row?.pending_credential_key])
+      if (key != null) await this.options.tokenStore.removeCredential(key);
     await this.options.tokenStore.remove();
     await this.options.tokenStore.removePending();
-    await this.options.clearAccount();
   }
 
   private async pendingToken(): Promise<string> {
@@ -161,30 +180,12 @@ export class AuthManager {
     return token;
   }
 
-  private async validate(tokenValue: string) {
-    const token = tokenValue.trim();
-    if (token.length === 0) {
-      throw new EmptyTokenError();
-    }
-
-    const api = this.options.apiFactory(token);
-    try {
-      const user = await api.getUser();
-      return { token, api, user };
-    } catch (error) {
-      if (error instanceof ApiError && error.status === 401) {
-        throw new InvalidTokenError();
-      }
-      throw error;
-    }
-  }
-
   private async initialSync(
-    api: WaniKaniApi,
-    expectedUserId: string,
+    token: string,
+    context: AccountContext,
     report?: InitialSyncReporter,
   ): Promise<void> {
-    const engine = this.options.syncFactory(api);
+    const engine = this.options.syncFactory(token, context);
     const unsubscribe = engine.store?.subscribe(({ phase }) => {
       const setupPhase = setupPhaseFor(phase);
       if (setupPhase !== null) report?.(runningInitialSync(setupPhase));
@@ -198,7 +199,7 @@ export class AuthManager {
     const cached = await this.cachedAccount();
     if (
       result.status !== 'completed' ||
-      cached?.user.data.id !== expectedUserId ||
+      cached?.user.data.id !== context.userId ||
       !cached.synchronized
     ) {
       const failure = initialSyncFailure(result);
@@ -207,9 +208,9 @@ export class AuthManager {
     }
   }
 
-  private async opportunisticSync(api: WaniKaniApi): Promise<void> {
+  private async opportunisticSync(token: string, context: AccountContext): Promise<void> {
     try {
-      await this.options.syncFactory(api).synchronize('quick');
+      await this.options.syncFactory(token, context).synchronize('quick');
     } catch {
       // Existing synchronized cache remains authoritative for authentication.
     }

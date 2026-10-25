@@ -41,6 +41,7 @@ import { ReviewStatisticRepository } from '@/db/repositories/ReviewStatisticRepo
 import { StudyMaterialRepository } from '@/db/repositories/StudyMaterialRepository';
 import { SubjectRepository } from '@/db/repositories/SubjectRepository';
 import { mergeRecentMistakes } from './recentMistakes';
+import { SyncControlRepository } from './SyncControlRepository';
 import type { RecentMistake } from './types';
 
 export interface SyncCursors {
@@ -409,38 +410,7 @@ export class SyncRepository implements SyncDataRepository {
   }
 
   async clearForLogout(): Promise<void> {
-    await this.db.transaction(async (tx) => {
-      for (const table of [
-        'assignments',
-        'pending_progress',
-        'pending_study_materials',
-        'study_materials',
-        'review_statistics',
-        'audio_urls',
-        'subject_progress',
-        'subjects_fts',
-        'subjects',
-        'voice_actors',
-        'level_progressions',
-        'user',
-        'recent_mistakes',
-        'sync_errors',
-        'active_sessions',
-      ]) {
-        await tx.run(`DELETE FROM ${table}`);
-      }
-      await tx.run(
-        `UPDATE sync_state SET
-          assignments_updated_at = NULL,
-          study_materials_updated_at = NULL,
-          subjects_updated_at = NULL,
-          voice_actors_updated_at = NULL,
-          review_statistics_updated_at = NULL,
-          last_full_sync_at = NULL,
-          last_sync_at = NULL
-         WHERE id = 1`,
-      );
-    });
+    await new SyncControlRepository(this.db).invalidateAccount();
   }
 }
 

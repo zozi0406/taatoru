@@ -17,7 +17,6 @@ import {
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { HttpWaniKaniApi } from '@/api/HttpWaniKaniApi';
-import type { WaniKaniApi } from '@/api/WaniKaniApi';
 import type { Database } from '@/db/Database';
 import { ExpoDatabase } from '@/db/ExpoDatabase';
 import { migrateDatabase } from '@/db/migrate';
@@ -28,7 +27,9 @@ import {
 } from '@/features/auth/AuthProvider';
 import { SecureTokenStore, type TokenStore } from '@/features/auth/tokenStore';
 import { ConnectivityUploadRetry } from '@/features/connectivity/ConnectivityUploadRetry';
-import { PendingWriteSender } from '@/features/sync/PendingWriteSender';
+import { OwnedSyncEngine } from '@/features/sync/OwnedSyncEngine';
+import { SyncControlRepository } from '@/features/sync/SyncControlRepository';
+import type { AccountContext } from '@/features/sync/types';
 import {
   ExpoNotificationPlatform,
   loadReviewNotificationInput,
@@ -39,7 +40,6 @@ import {
   type SyncEngine,
   type SyncMode,
   type SyncResult,
-  SynchronizationEngine,
 } from '@/features/sync/SyncEngine';
 import { SyncRepository } from '@/features/sync/SyncRepository';
 import { useTheme } from '@/ui/theme/ThemeProvider';
@@ -74,7 +74,7 @@ export function AppProviders({ children }: PropsWithChildren) {
         database = openedDatabase;
         await migrateDatabase(openedDatabase);
         if (!active) return;
-        const tokenStore = new SecureTokenStore();
+        const tokenStore = new SecureTokenStore(openedDatabase);
         const syncRepository = new SyncRepository(openedDatabase);
         const notificationService = new NotificationService(
           new ExpoNotificationPlatform(),
@@ -95,23 +95,22 @@ export function AppProviders({ children }: PropsWithChildren) {
             return false;
           }
         };
-        const createSyncEngine = (api: WaniKaniApi): SyncEngine =>
-          new SynchronizationEngine({
-            api,
-            repository: syncRepository,
-            pendingWrites: new PendingWriteSender(openedDatabase, api),
-            isOnline,
-            invalidate: () => {
-              //
-            },
+        const control = new SyncControlRepository(openedDatabase);
+        const createSyncEngine = (token: string, context: AccountContext): SyncEngine =>
+          new OwnedSyncEngine({
+            db: openedDatabase, context,
+            apiFactory: () => new HttpWaniKaniApi({ token }),
+            isOnline, invalidate: () => {},
             updateNotifications: rebuildNotifications,
             now: () => new Date(),
           });
         let runtimeToken: string | null = null;
         let runtimeSyncEngine: SyncEngine | null = null;
+        let runtimeContextKey: string | null = null;
         const synchronize = async (mode: SyncMode): Promise<SyncResult> => {
           const token = await tokenStore.get();
-          if (token === null) {
+          const context = await control.getAccountContext();
+          if (token === null || context === null) {
             return {
               status: 'failed',
               error: {
@@ -124,11 +123,11 @@ export function AppProviders({ children }: PropsWithChildren) {
               },
             };
           }
-          if (runtimeSyncEngine === null || runtimeToken !== token) {
+          const contextKey = `${context.accountEpoch}:${context.credentialRevision}`;
+          if (runtimeSyncEngine === null || runtimeToken !== token || runtimeContextKey !== contextKey) {
             runtimeToken = token;
-            runtimeSyncEngine = createSyncEngine(
-              new HttpWaniKaniApi({ token }),
-            );
+            runtimeContextKey = contextKey;
+            runtimeSyncEngine = createSyncEngine(token, context);
           }
           return runtimeSyncEngine.synchronize(mode);
         };

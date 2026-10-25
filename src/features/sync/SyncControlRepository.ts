@@ -75,10 +75,12 @@ export class SyncControlRepository {
     return this.transact(async (tx) => {
       const row = await this.read(tx);
       await this.assertReservation(tx, reservation);
-      const changed = row.user_id !== null && row.user_id !== userId;
+      const cached = await tx.first<{ id: string }>('SELECT id FROM user LIMIT 1');
+      const previousId = row.user_id ?? cached?.id ?? null;
+      const changed = previousId !== null && previousId !== userId;
       if (changed && !replaceAccount) throw new AccountIdentityError();
       if (changed) await clearAccountData(tx);
-      const epoch = row.account_epoch + (row.user_id === null || changed ? 1 : 0);
+      const epoch = row.account_epoch + (previousId === null || changed ? 1 : 0);
       await tx.run(`UPDATE sync_control SET user_id = ?, account_epoch = ?,
         credential_revision = ?, active_credential_key = ?,
         pending_credential_key = NULL, transition_id = NULL, auth_state = 'active',
