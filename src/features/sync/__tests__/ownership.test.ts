@@ -22,6 +22,7 @@ test('a late full refresh cannot restore account data after logout', async () =>
       rateLimit: { requestsRemaining: 60 },
       getSubjects: async () => { started(); await blocked; return collectionPage([kanjiFixture]); },
       getUser: async () => userFixture,
+      getResets: async () => collectionPage([]),
       getAssignments: async () => collectionPage([]),
       getStudyMaterials: async () => collectionPage([]),
       getLevelProgressions: async () => collectionPage([]),

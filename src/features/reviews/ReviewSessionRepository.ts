@@ -292,12 +292,14 @@ export class ReviewSessionRepository {
     now: Date,
   ): Promise<ReviewSessionSnapshot> {
     const updated = { ...snapshot, updatedAt: now.toISOString() };
-    await tx.run(
+    const saved = await tx.run(
       `UPDATE active_sessions
        SET state_json = ?, updated_at = ?
-       WHERE id = 'review' AND kind = 'review'`,
-      [JSON.stringify(toStoredState(updated)), updated.updatedAt],
+       WHERE id = 'review' AND kind = 'review' AND created_at = ?`,
+      [JSON.stringify(toStoredState(updated)), updated.updatedAt, snapshot.createdAt],
     );
+    if (saved.changes === 0)
+      throw new Error('Review availability changed. Reload reviews to continue.');
     return updated;
   }
 }

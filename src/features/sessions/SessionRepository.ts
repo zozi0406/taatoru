@@ -115,12 +115,13 @@ export class SessionRepository {
       ...snapshot,
       updatedAt: now.toISOString(),
     };
-    await executor.run(
+    const saved = await executor.run(
       `UPDATE active_sessions
        SET state_json = ?, updated_at = ?
-       WHERE id = 'lesson' AND kind = 'lesson'`,
-      [JSON.stringify(toStoredState(updated)), updated.updatedAt],
+       WHERE id = 'lesson' AND kind = 'lesson' AND created_at = ?`,
+      [JSON.stringify(toStoredState(updated)), updated.updatedAt, snapshot.createdAt],
     );
+    if (saved.changes === 0) throw new Error('Lesson availability changed. Reload lessons to continue.');
     return updated;
   }
 
@@ -225,6 +226,7 @@ export class SessionRepository {
       ON CONFLICT(id) DO UPDATE SET
         kind = excluded.kind,
         state_json = excluded.state_json,
+        created_at = excluded.created_at,
         updated_at = excluded.updated_at
       WHERE ? <> 'selection' OR json_extract(active_sessions.state_json, '$.phase') = 'selection'`,
       [

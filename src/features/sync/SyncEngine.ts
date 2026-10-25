@@ -329,7 +329,7 @@ async function allOrThrow<T>(
   return results.map((result) => (result as PromiseFulfilledResult<T>).value);
 }
 
-function toSafeSyncError(error: unknown): SafeSyncError {
+export function toSafeSyncError(error: unknown): SafeSyncError {
   if (error instanceof ApiError) {
     return {
       kind:

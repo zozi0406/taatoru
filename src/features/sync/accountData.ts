@@ -6,7 +6,7 @@ export async function clearAccountData(tx: DatabaseTransaction): Promise<void> {
     'assignments', 'pending_progress', 'pending_study_materials',
     'study_materials', 'review_statistics', 'audio_urls', 'subject_progress',
     'subjects_fts', 'subjects', 'voice_actors', 'level_progressions', 'user',
-    'recent_mistakes', 'sync_errors', 'active_sessions', 'sync_dispatches', 'sync_outcomes',
+    'recent_mistakes', 'sync_errors', 'active_sessions', 'sync_dispatches', 'sync_outcomes', 'sync_resets',
   ]) await tx.run(`DELETE FROM ${table}`);
   await tx.run(`UPDATE sync_state SET
     assignments_updated_at = NULL, study_materials_updated_at = NULL,

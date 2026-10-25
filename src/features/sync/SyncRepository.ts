@@ -414,7 +414,7 @@ export class SyncRepository implements SyncDataRepository {
   }
 }
 
-class TransactionDatabase implements Database {
+export class TransactionDatabase implements Database {
   constructor(private readonly tx: DatabaseTransaction) {}
 
   run(

@@ -3,10 +3,11 @@ import type { Database } from '@/db/Database';
 import { FencedDatabase } from './FencedDatabase';
 import { PendingWriteSender } from './PendingWriteSender';
 import { StaleSyncError, SyncControlRepository } from './SyncControlRepository';
-import { SynchronizationEngine, type SyncEngine, type SyncMode, type SyncResult } from './SyncEngine';
+import { SynchronizationEngine, toSafeSyncError, type SyncEngine, type SyncMode, type SyncResult } from './SyncEngine';
 import { SyncRepository } from './SyncRepository';
 import { createSyncStore } from './syncStore';
 import type { AccountContext, SyncLease } from './types';
+import { SyncPreflight } from './SyncPreflight';
 
 export interface OwnedSyncOptions {
   readonly db: Database;
@@ -55,6 +56,7 @@ export class OwnedSyncEngine implements SyncEngine {
           };
         },
       });
+      await new SyncPreflight(db, api, options.context).run(mode);
       const engine = new SynchronizationEngine({
         api, repository: new SyncRepository(db), pendingWrites: new PendingWriteSender(db, api),
         isOnline: options.isOnline, now: options.now,
@@ -68,7 +70,9 @@ export class OwnedSyncEngine implements SyncEngine {
       await check();
       this.store.setState(engine.store.getState());
       return result;
-    } catch {
+    } catch (error) {
+      if (!(error instanceof StaleSyncError))
+        return { status: 'failed', error: toSafeSyncError(error) };
       return { status: 'failed', error: {
         kind: 'ownership', message: 'Synchronization stopped because the account or sync owner changed.',
         status: null, safeUrl: null, retryAt: null, hibernating: false,

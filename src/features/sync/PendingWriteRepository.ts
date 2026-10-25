@@ -43,6 +43,7 @@ export interface QueuedStudyMaterial {
 
 interface ProgressRow {
   readonly srsStage: number;
+  readonly level: number;
 }
 
 interface PendingProgressRow {
@@ -230,6 +231,7 @@ export class PendingWriteRepository {
         assignment: JSON.parse(assignment!.resource_json),
         statistic: statistic === null ? null : JSON.parse(statistic.resource_json),
         resetAt: control.last_confirmed_reset_at,
+        level: progress.level,
       });
       const operationKey = await new SyncControlRepository(this.db)
         .allocateOperationKey(tx, control.account_epoch);
@@ -305,7 +307,7 @@ async function currentProgress(
   completion: LessonCompletion,
 ): Promise<ProgressRow> {
   const row = await tx.first<ProgressRow>(
-    `SELECT sp.srs_stage AS srsStage
+    `SELECT sp.srs_stage AS srsStage, sp.level
      FROM subject_progress sp
      JOIN assignments a
        ON a.subject_id = sp.subject_id

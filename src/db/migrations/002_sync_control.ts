@@ -40,6 +40,12 @@ export const MIGRATION_2_STATEMENTS: readonly string[] = [
   `UPDATE pending_progress SET projection_json = (
     SELECT json_object('srsStage', sp.srs_stage, 'lastMistakeAt', sp.last_mistake_at)
     FROM subject_progress sp WHERE sp.subject_id = pending_progress.subject_id)`,
+  `CREATE TABLE sync_resets (
+    id INTEGER PRIMARY KEY,
+    confirmed_at TEXT,
+    target_level INTEGER NOT NULL,
+    data_updated_at TEXT NOT NULL
+  )`,
   `CREATE TABLE sync_dispatches (
     operation_key TEXT NOT NULL,
     revision INTEGER NOT NULL,
