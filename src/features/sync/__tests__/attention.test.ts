@@ -1,5 +1,7 @@
 import { FixtureSyncApi, SYNC_NOW, syncDatabase } from '@/test/sync/fixtures';
-import { studyMaterialFixture } from '@/fixtures/api';
+import { assignmentFixture, studyMaterialFixture } from '@/fixtures/api';
+import { AssignmentRepository } from '@/db/repositories/AssignmentRepository';
+import { SyncRepository } from '../SyncRepository';
 import { PendingWriteRepository } from '../PendingWriteRepository';
 import { PendingWriteSender } from '../PendingWriteSender';
 import { SyncAttentionRepository } from '../SyncAttentionRepository';
@@ -68,5 +70,32 @@ test('account transition freezes local writes before the pending-work check and 
     await control.beginCredentialTransition();
     await expect(screen.run("INSERT INTO settings VALUES ('late-transition-write', 'fixture')")).rejects.toThrow('ownership');
     expect(await db.first("SELECT key FROM settings WHERE key = 'late-transition-write'")).toBeNull();
+  } finally { await db.close(); }
+});
+
+
+test.each([true, false])('choosing remote progress rebuilds from the newest assignment: cachedNewer=%s', async (cachedNewer) => {
+  const db = await syncDatabase();
+  try {
+    await new PendingWriteRepository(db).completeReview({ assignmentId: 501, subjectId: 201, completedAt: SYNC_NOW,
+      incorrectMeaningAnswers: 1, incorrectReadingAnswers: 0 });
+    const observed = { ...assignmentFixture, data_updated_at: cachedNewer ? '2026-10-25T12:00:00Z' : '2026-10-27T12:00:00Z',
+      data: { ...assignmentFixture.data, srs_stage: 3, available_at: '2026-10-28T12:00:00Z' } };
+    await db.run("UPDATE pending_progress SET delivery_state = 'rejected', last_error_kind = 'review-conflict', conflict_json = ?",
+      [JSON.stringify({ remote: { assignment: observed } })]);
+    const attention = new SyncAttentionRepository(db);
+    const change = (await attention.list())[0]!;
+    const latest = { ...assignmentFixture, data_updated_at: '2026-10-26T12:00:00Z',
+      data: { ...assignmentFixture.data, srs_stage: 4, available_at: '2026-10-29T12:00:00Z' } };
+    const cursor = '2026-10-26T13:00:00Z';
+    await new AssignmentRepository(db).replaceAssignments([latest], cursor);
+    expect(await db.first('SELECT srs_stage, available_at FROM subject_progress')).toEqual({ srs_stage: 1, available_at: null });
+    await attention.resolve(change, 'use-remote');
+    const chosen = cachedNewer ? latest : observed;
+    expect(await db.first('SELECT srs_stage, available_at FROM subject_progress'))
+      .toEqual({ srs_stage: chosen.data.srs_stage, available_at: chosen.data.available_at });
+    expect(await db.first('SELECT resource_json FROM assignments')).toEqual({ resource_json: JSON.stringify(chosen) });
+    expect((await new SyncRepository(db).getStateSnapshot()).cursors.assignments).toBe(cursor);
+    expect(await attention.list()).toEqual([]);
   } finally { await db.close(); }
 });

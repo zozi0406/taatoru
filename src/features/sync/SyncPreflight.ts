@@ -46,10 +46,12 @@ export class SyncPreflight {
         await tx.run('DELETE FROM assignments');
         await tx.run('DELETE FROM subject_progress');
         await tx.run('DELETE FROM review_statistics');
-        await repository.replaceAssignments(assignments.data, assignments.data_updated_at);
-        await repository.replaceReviewStatistics(statistics.data, statistics.data_updated_at);
-        // Subjects newly accessible after a reset are imported by the next phase.
-        // Replay their assignments/statistics after that import instead of skipping them.
+        // First sign-in and newly accessible subjects may have no cached parent.
+        // Defer those dependent rows to the normal subject-first download phase.
+        const subjectIds = new Set((await tx.all<{ id: number }>('SELECT id FROM subjects')).map(({ id }) => id));
+        await repository.replaceAssignments(assignments.data.filter(({ data }) => subjectIds.has(data.subject_id)), assignments.data_updated_at);
+        await repository.replaceReviewStatistics(statistics.data.filter(({ data }) => subjectIds.has(data.subject_id)), statistics.data_updated_at);
+        // Replay the complete collections after subjects have been imported.
         await tx.run('UPDATE sync_state SET assignments_updated_at = NULL, review_statistics_updated_at = NULL WHERE id = 1');
         await tx.run(`UPDATE pending_progress SET delivery_state = 'uncertain', next_attempt_at = NULL`);
         for (const reset of newResets) {

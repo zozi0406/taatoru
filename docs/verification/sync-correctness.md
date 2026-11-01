@@ -85,3 +85,12 @@ The original checkpoint was `4f1b938`. The follow-up adopts API material state a
 Follow-up verification: `npm run verify` passed lint, TypeScript, 70 Jest suites / 406 tests and 13 release-configuration tests. CI-pinned `expo-doctor@1.20.1` passed 20/20 checks, and `npm run prebuild:check` passed with no tracked native-project changes. Android fixture/device evidence remains dated 25 October; no device was attached for the 1 November follow-up.
 
 A final regression also verifies that orphan material history cannot bypass a newer edit's retry deadline or cause repeated syncs while that edit is rejected. CI passed for `ef32f70` before this small scheduling fix; the PR checks the new head separately.
+
+## GitHub review follow-up — 1 November 2026
+
+Both findings from PR #5's automated review of `ef32f70` were reproduced before fixing:
+
+- [Reset preflight foreign keys / initial setup](https://github.com/zozi0406/taatoru/pull/5#discussion_r4435059215): rebuild only dependent rows whose subjects are already cached, retain null assignment/statistic cursors, and replay missing rows after the normal subject import. Fresh-database quick and full sync regressions cover historical confirmed resets with foreign keys enabled.
+- [Stale effective projection after remote choice](https://github.com/zozi0406/taatoru/pull/5#discussion_r4435059216): after version-checked conflict imports and exact pending removal, rebuild effective progress from the winning cached assignment. Regressions cover both newer-cache and newer-observed versions and preservation of the collection cursor.
+
+The complete Node 22 verification gate passed: 70 Jest suites / 410 tests, lint, TypeScript and 13 release-configuration tests. No new device checks were performed for these TypeScript changes.

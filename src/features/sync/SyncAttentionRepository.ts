@@ -66,12 +66,14 @@ export class SyncAttentionRepository {
             if (observed.assignment.data.subject_id !== change.subjectId) throw new Error('Review identity changed');
             await repository.replaceAssignments([observed.assignment], cursors.assignments);
             if (observed.reviewStatistic !== undefined) await repository.replaceReviewStatistics([observed.reviewStatistic], cursors.reviewStatistics);
-          } else {
-            const resource = await tx.first<{ resource_json: string }>('SELECT resource_json FROM assignments WHERE subject_id = ?', [change.subjectId]);
-            if (resource !== null) await repository.replaceAssignments(
-              [JSON.parse(resource.resource_json) as IdentifiedResource<AssignmentData, 'assignment'>], cursors.assignments);
-            else await tx.run('DELETE FROM subject_progress WHERE subject_id = ?', [change.subjectId]);
           }
+          // An older observed conflict is skipped by resource version checks.
+          // Reapply the winning cached assignment after removing the overlay so
+          // effective progress cannot retain the discarded local projection.
+          const resource = await tx.first<{ resource_json: string }>('SELECT resource_json FROM assignments WHERE subject_id = ?', [change.subjectId]);
+          if (resource !== null) await repository.replaceAssignments(
+            [JSON.parse(resource.resource_json) as IdentifiedResource<AssignmentData, 'assignment'>], cursors.assignments);
+          else await tx.run('DELETE FROM subject_progress WHERE subject_id = ?', [change.subjectId]);
         } else {
           const cached = await tx.first<{ resource_json: string; id: number }>('SELECT resource_json, id FROM study_materials WHERE subject_id = ?', [change.subjectId]);
           const conflict = row.conflict_json === null ? null : JSON.parse(row.conflict_json) as { remote: MaterialReceipt | null };
