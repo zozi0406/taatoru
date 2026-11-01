@@ -120,7 +120,7 @@ describe('InitialSyncScreen', () => {
 
     expect(screen.getByText('Setup was interrupted')).toBeTruthy();
     expect(
-      screen.getByText(/restart the download from the beginning/i),
+      screen.getByText(/Your saved progress stays on this device/i),
     ).toBeTruthy();
 
     await fireEvent.press(

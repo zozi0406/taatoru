@@ -1,6 +1,6 @@
 # WaniKani API integration
 
-API contract last validated: 5 August 2026. Implementation revalidated: 25 October 2026.
+API contract last validated: 5 August 2026. Implementation revalidated: 1 November 2026.
 
 Taatoru uses the [WaniKani API v2 revision
 20170710](https://docs.api.wanikani.com/20170710/). This document summarizes the
@@ -101,7 +101,7 @@ The table and validation evidence above describe the August implementation. The 
 - Every production HTTP request uses the persisted scheduler, including pagination, credential validation and reconciliation. It spaces requests by at least 1,100 ms, honors quota/reset delays and applies deadlines/backoff.
 - Typed write receipts, immutable dispatch evidence and fenced settlement handle lost responses, 422s and newer local revisions. No deprecated review-history endpoint is used.
 
-The complete verification gate passed: 68 Jest suites / 375 tests plus 13 release-configuration tests, lint and TypeScript. Android fixture checks exercised real Expo SQLite and isolated study screens. See [the release evidence and limits](verification/sync-correctness.md) and [reference matrix](verification/sync-reference-matrix.md). No real account was mutated by these checks.
+The complete verification gate passed: 69 Jest suites / 393 tests plus 13 release-configuration tests, lint and TypeScript. Android fixture checks exercised real Expo SQLite and isolated study screens. See [the release evidence and limits](verification/sync-correctness.md) and [reference matrix](verification/sync-reference-matrix.md). No real account was mutated by these checks.
 
 Conditional reads with ETag/Last-Modified and reducing the unconditional level-progression download remain efficiency follow-ups. Remote preflight is not atomic with later server changes; WaniKani supplies no documented material compare-and-set or review idempotency key. Those limits remain explicit.
 

@@ -253,7 +253,7 @@ test('exposes interrupted setup without making a request on launch', async () =>
   }
 });
 
-test('restarts interrupted setup after clearing the incomplete cache', async () => {
+test('resumes interrupted setup without clearing the incomplete cache', async () => {
   const harness = await authHarness();
   harness.tokenStore.getPending.mockResolvedValue('pending-token');
   await new ResourceRepository(harness.db).replaceUser(userFixture);
@@ -281,9 +281,7 @@ test('restarts interrupted setup after clearing the incomplete cache', async () 
       userFixture,
     );
 
-    expect(harness.clearAccount.mock.invocationCallOrder[0]).toBeLessThan(
-      harness.api.getUser.mock.invocationCallOrder[0]!,
-    );
+    expect(harness.clearAccount).not.toHaveBeenCalled();
     await expect(
       harness.db.first('SELECT value FROM settings WHERE key = ?', ['theme']),
     ).resolves.toEqual({ value: 'dark' });
@@ -292,7 +290,7 @@ test('restarts interrupted setup after clearing the incomplete cache', async () 
   }
 });
 
-test('using another API key clears partial data and the pending credential', async () => {
+test('using another API key preserves partial data and removes only the pending credential', async () => {
   const harness = await authHarness();
   await new ResourceRepository(harness.db).replaceUser(userFixture);
   await harness.db.run(
@@ -302,12 +300,11 @@ test('using another API key clears partial data and the pending credential', asy
     await harness.manager.useAnotherApiKey();
 
     expect(harness.apiFactory).not.toHaveBeenCalled();
-    expect(harness.clearAccount.mock.invocationCallOrder[0]).toBeLessThan(
-      harness.tokenStore.removePending.mock.invocationCallOrder[0]!,
-    );
+    expect(harness.clearAccount).not.toHaveBeenCalled();
+    expect(harness.tokenStore.removePending).toHaveBeenCalled();
     await expect(
       harness.db.first('SELECT id FROM user LIMIT 1'),
-    ).resolves.toBeNull();
+    ).resolves.toEqual({ id: userFixture.data.id });
     await expect(
       harness.db.first('SELECT value FROM settings WHERE key = ?', ['theme']),
     ).resolves.toEqual({ value: 'dark' });

@@ -88,11 +88,11 @@ export function AppProviders({ children }: PropsWithChildren) {
         const notificationService = new NotificationService(
           new ExpoNotificationPlatform(),
         );
-        const rebuildForAccount = async (expected?: AccountContext) => {
+        const rebuildForAccount = async (expected?: AccountContext, assertOwner?: () => Promise<void>) => {
           const control = new SyncControlRepository(openedDatabase);
           const context = expected ?? await control.getLocalAccountContext();
           if (context === null) return;
-          const assertCurrent = () => control.assertAccount(openedDatabase, context);
+          const assertCurrent = assertOwner ?? (() => control.assertAccount(openedDatabase, context));
           await assertCurrent();
           await notificationService.rebuild(
             await loadReviewNotificationInput(new AccountDatabase(openedDatabase, context), new Date()), assertCurrent,
@@ -135,7 +135,7 @@ export function AppProviders({ children }: PropsWithChildren) {
               });
             },
             isOnline, invalidate,
-            updateNotifications: () => rebuildForAccount(context),
+            updateNotifications: (assertOwner) => rebuildForAccount(context, assertOwner),
             now: () => new Date(),
           });
           runtimeSyncEngine = new SyncCoordinator({ db: openedDatabase, context, engine });

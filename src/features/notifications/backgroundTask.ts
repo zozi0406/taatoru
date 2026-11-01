@@ -65,10 +65,10 @@ export async function runBackgroundQuickSync(): Promise<boolean> {
       invalidate: () => {
         //
       },
-      updateNotifications: async () => {
+      updateNotifications: async (assertOwner) => {
         await notificationService.rebuild(
           await loadReviewNotificationInput(new AccountDatabase(db, context), new Date()),
-          () => new SyncControlRepository(db).assertAccount(db, context),
+          assertOwner,
         );
       },
       now: () => new Date(),

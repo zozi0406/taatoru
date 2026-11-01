@@ -1,4 +1,5 @@
 import { ApiError, NetworkError } from '@/api/errors';
+import type { WaniKaniApi } from '@/api/WaniKaniApi';
 import { FixtureSyncApi, SYNC_NOW, syncDatabase } from '@/test/sync/fixtures';
 import { PendingWriteRepository } from '../PendingWriteRepository';
 import { PendingWriteSender } from '../PendingWriteSender';
@@ -165,4 +166,45 @@ test('an expired owner with a successful request outstanding cannot acknowledge 
     expect(api.reviews).toHaveLength(1);
     expect(await db.first('SELECT COUNT(*) AS n FROM pending_progress')).toEqual({ n: 0 });
   } finally { release?.(); await db.close(); }
+});
+
+
+test.each(['missing-source', 'missing-remote', 'decreased', 'equal-total-change', 'different-id', 'different-subject', 'backwards-due'] as const)(
+  '%s evidence cannot discard or resubmit an offline review', async (kind) => {
+    const db = await queuedReview(); const api = new FixtureSyncApi();
+    try {
+      if (kind === 'missing-source') {
+        await db.run("UPDATE pending_progress SET source_json = json_set(source_json, '$.statistic', json('null'))");
+        api.assignment = { ...api.assignment, data: { ...api.assignment.data, available_at: '2026-11-01T12:00:00Z' } };
+      }
+      if (kind === 'missing-remote') (api as WaniKaniApi).findReviewStatistic = async () => null;
+      if (kind === 'decreased') api.statistic = { ...api.statistic, data: { ...api.statistic.data, meaning_correct: 0 } };
+      if (kind === 'equal-total-change') api.statistic = { ...api.statistic, data: { ...api.statistic.data,
+        meaning_correct: api.statistic.data.meaning_correct - 1, reading_correct: api.statistic.data.reading_correct + 1 } };
+      if (kind === 'different-id') api.statistic = { ...api.statistic, id: api.statistic.id + 1 };
+      if (kind === 'different-subject') api.statistic = { ...api.statistic, data: { ...api.statistic.data, subject_id: 999 } };
+      if (kind === 'backwards-due') {
+        api.statistic = { ...api.statistic, data: { ...api.statistic.data, meaning_correct: api.statistic.data.meaning_correct + 1 } };
+        api.assignment = { ...api.assignment, data: { ...api.assignment.data, available_at: '2026-01-01T12:00:00Z' } };
+      }
+      await new PendingWriteSender(db, api).sendSelectedPendingWrites(selection, SYNC_NOW);
+      expect(api.reviews).toHaveLength(0);
+      expect(await db.first('SELECT delivery_state, incorrect_meaning_answers FROM pending_progress'))
+        .toEqual({ delivery_state: 'rejected', incorrect_meaning_answers: 1 });
+      expect(await db.first('SELECT outcome FROM sync_outcomes')).toBeNull();
+    } finally { await db.close(); }
+  },
+);
+
+test('a first review remains deliverable when both statistic observations are absent', async () => {
+  const db = await queuedReview(); const api = new FixtureSyncApi();
+  try {
+    api.assignment = { ...api.assignment, data: { ...api.assignment.data, srs_stage: 1 } };
+    await db.run("UPDATE pending_progress SET source_json = json_set(source_json, '$.assignment.data.srs_stage', 1)");
+    await db.run("UPDATE pending_progress SET source_json = json_set(source_json, '$.statistic', json('null'))");
+    (api as WaniKaniApi).findReviewStatistic = async () => null;
+    await new PendingWriteSender(db, api).sendSelectedPendingWrites(selection, SYNC_NOW);
+    expect(api.reviews).toHaveLength(1);
+    expect(await db.first('SELECT COUNT(*) AS n FROM pending_progress')).toEqual({ n: 0 });
+  } finally { await db.close(); }
 });

@@ -15,7 +15,7 @@ export interface OwnedSyncOptions {
   readonly apiFactory: (lease: SyncLease, signal: AbortSignal) => WaniKaniApi;
   readonly isOnline: () => Promise<boolean>;
   readonly invalidate: () => void | Promise<void>;
-  readonly updateNotifications: () => void | Promise<void>;
+  readonly updateNotifications: (assertCurrent: () => Promise<void>) => void | Promise<void>;
   readonly now: () => Date;
 }
 
@@ -61,7 +61,7 @@ export class OwnedSyncEngine implements SyncEngine {
         api, repository: new SyncRepository(db, options.now), pendingWrites: new PendingWriteSender(db, api, ownedLease.ownerFence, user.data.subscription.max_level_granted),
         isOnline: options.isOnline, now: options.now,
         invalidate: async () => { await check(); await options.invalidate(); },
-        updateNotifications: async () => { await check(); await options.updateNotifications(); },
+        updateNotifications: async () => { await check(); await options.updateNotifications(check); },
       });
       unsubscribe = engine.store.subscribe((state) => {
         void check().then(() => this.store.setState(state)).catch(() => {});

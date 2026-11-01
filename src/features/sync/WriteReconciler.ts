@@ -1,4 +1,5 @@
 import { ApiError } from '@/api/errors';
+import { compareWaniKaniDates } from '@/api/date';
 import type { WaniKaniApi } from '@/api/WaniKaniApi';
 import type { AssignmentData, IdentifiedResource, ReviewStatisticData, MaterialReceipt } from '@/api/types';
 import type { Database } from '@/db/Database';
@@ -92,10 +93,13 @@ export class WriteReconciler {
       if (before.started_at !== null || after.unlocked_at === null) return attention('lesson-unavailable');
     } else {
       const statistic = await this.api.findReviewStatistic(operation.subjectId, signal);
-      const countersAdvanced = statistic !== null && counterTotal(statistic.data) >
-        (source.statistic === null ? 0 : counterTotal(source.statistic.data));
+      const counters = compareCounters(source.statistic, statistic, operation.subjectId, before.srs_stage);
+      if (counters === 'unknown') return attention('review-evidence-incomplete');
+      const countersAdvanced = counters === 'advanced';
       const cycleChanged = before.available_at !== after.available_at || after.burned_at !== null;
-      if (countersAdvanced && cycleChanged)
+      const dueAdvanced = before.available_at !== null && after.available_at !== null &&
+        compareWaniKaniDates(after.available_at, before.available_at) > 0;
+      if (countersAdvanced && (dueAdvanced || after.burned_at !== null))
         return { kind: 'superseded', receipt: { assignment, ...(statistic === null ? {} : { reviewStatistic: statistic }) }, reason: 'remote-progress-advanced' };
       if (before.srs_stage !== after.srs_stage || cycleChanged || countersAdvanced || after.started_at === null)
         return attention('opportunity-changed');
@@ -122,8 +126,26 @@ export function sameFields(a: MaterialFields, b: MaterialFields): boolean {
 
 function equal(a: unknown, b: unknown): boolean { return JSON.stringify(a) === JSON.stringify(b); }
 
-function counterTotal(data: ReviewStatisticData): number {
-  return data.meaning_correct + data.meaning_incorrect + data.reading_correct + data.reading_incorrect;
+function compareCounters(
+  before: IdentifiedResource<ReviewStatisticData, 'review_statistic'> | null,
+  after: IdentifiedResource<ReviewStatisticData, 'review_statistic'> | null,
+  subjectId: number,
+  stage: number,
+): 'same' | 'advanced' | 'unknown' {
+  // WaniKani creates the statistic on the first review. Two absent observations
+  // at the initial stage can still represent the unchanged first opportunity.
+  if (before === null && after === null) return stage === 1 ? 'same' : 'unknown';
+  if (before === null || after === null || before.id !== after.id ||
+      before.data.subject_id !== subjectId || after.data.subject_id !== subjectId ||
+      before.data.created_at !== after.data.created_at || after.data.hidden ||
+      compareWaniKaniDates(after.data_updated_at, before.data_updated_at) < 0) return 'unknown';
+  let advanced = false;
+  for (const field of ['meaning_correct', 'meaning_incorrect', 'reading_correct', 'reading_incorrect'] as const) {
+    const old = before.data[field]; const current = after.data[field];
+    if (!Number.isSafeInteger(old) || old < 0 || !Number.isSafeInteger(current) || current < old) return 'unknown';
+    if (current > old) advanced = true;
+  }
+  return advanced ? 'advanced' : 'same';
 }
 
 function progressSource(json: string | null): ProgressSource | null {

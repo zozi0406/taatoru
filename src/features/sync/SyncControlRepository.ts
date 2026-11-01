@@ -98,14 +98,15 @@ export class SyncControlRepository {
     });
   }
 
-  async cancelCredentialTransition(reservation: CredentialReservation): Promise<void> {
-    await this.transact(async (tx) => {
+  async cancelCredentialTransition(reservation: CredentialReservation): Promise<boolean> {
+    return this.transact(async (tx) => {
       const row = await this.read(tx);
-      if (row.transition_id !== reservation.transitionId) return;
+      if (row.transition_id !== reservation.transitionId) return false;
       await tx.run(`UPDATE sync_control SET pending_credential_key = NULL,
         transition_id = NULL, auth_state = CASE
         WHEN active_credential_key IS NOT NULL THEN 'active'
         WHEN user_id IS NOT NULL THEN 'legacy' ELSE 'signed_out' END WHERE id = 1`);
+      return true;
     });
   }
 

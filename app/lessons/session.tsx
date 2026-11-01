@@ -19,12 +19,13 @@ import {
   addStudySynonym,
   loadStudyMaterials,
 } from '@/features/sessions/studyMaterials';
+import { useStudyMaterialRefresh } from '@/features/sessions/useStudyMaterialRefresh';
 import type { SubjectStudyMaterial } from '@/features/subjects/subjectDetails';
 import { useTheme } from '@/ui/theme/ThemeProvider';
 
 export default function LessonSessionRoute() {
   const router = useRouter();
-  const { db, notifyPendingWrites } = useAppServices();
+  const { db, notifyPendingWrites, subscribeToData } = useAppServices();
   const theme = useTheme();
   const sessions = useMemo(() => new SessionRepository(db), [db]);
   const [snapshot, setSnapshot] = useState<LessonSessionSnapshot | null>(null);
@@ -38,6 +39,7 @@ export default function LessonSessionRoute() {
   >({});
   const [error, setError] = useState<string | null>(null);
 
+  useStudyMaterialRefresh(db, subjects, setMaterials, subscribeToData);
   useEffect(() => {
     let active = true;
     void sessions

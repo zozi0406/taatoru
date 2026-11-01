@@ -7,12 +7,14 @@ import {
 import {
   assignmentFixture,
   kanjiFixture,
+  reviewStatisticFixture,
   studyMaterialFixture,
   userFixture,
 } from '@/fixtures/api';
 import { migrateDatabase } from '@/db/migrate';
 import { NodeTestDatabase } from '@/db/NodeTestDatabase';
 import { AssignmentRepository } from '@/db/repositories/AssignmentRepository';
+import { ReviewStatisticRepository } from '@/db/repositories/ReviewStatisticRepository';
 import { ResourceRepository } from '@/db/repositories/ResourceRepository';
 import { StudyMaterialRepository } from '@/db/repositories/StudyMaterialRepository';
 import { SubjectRepository } from '@/db/repositories/SubjectRepository';
@@ -428,6 +430,8 @@ async function pendingDatabase(
     await new SubjectRepository(db).replaceSubjects([{ ...kanjiFixture, id: row.subjectId }], null);
     await new AssignmentRepository(db).replaceAssignments([{ ...assignmentFixture, id: row.assignmentId,
       data: { ...assignmentFixture.data, subject_id: row.subjectId, available_at: '2026-07-29T11:00:00.000Z' } }], null);
+    await new ReviewStatisticRepository(db).replaceReviewStatistics([{ ...reviewStatisticFixture,
+      id: row.subjectId + 10_000, data: { ...reviewStatisticFixture.data, subject_id: row.subjectId } }], null);
     await new PendingWriteRepository(db).completeReview({ ...row, completedAt: new Date(row.createdAt),
       incorrectMeaningAnswers: 1, incorrectReadingAnswers: 0 });
   }
@@ -447,7 +451,8 @@ function writeApi() {
     rateLimit: { estimatedClockSkewMs: 0 },
     getAssignment: jest.fn(async (id: number) => ({ ...assignmentFixture, id,
       data: { ...assignmentFixture.data, subject_id: id - 300, available_at: '2026-07-29T11:00:00.000Z' } })),
-    findReviewStatistic: jest.fn(async () => null),
+    findReviewStatistic: jest.fn(async (subjectId: number) => ({ ...reviewStatisticFixture,
+      id: subjectId + 10_000, data: { ...reviewStatisticFixture.data, subject_id: subjectId } })),
     findStudyMaterial: jest.fn(async () => null),
     startAssignment: jest.fn(async () => ({ assignment: assignmentFixture })),
     createReview: jest.fn(async (input: Parameters<WaniKaniApi['createReview']>[0]) => ({ assignment: {

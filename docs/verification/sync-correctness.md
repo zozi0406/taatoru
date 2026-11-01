@@ -1,6 +1,6 @@
 # Sync correctness implementation and verification
 
-25 October 2026. Implementation baseline: `e406d41`; branch: `codex/taatoru-sync-correctness`.
+Implementation/device evidence: 25 October 2026. Final review fixes verified: 1 November 2026. Implementation baseline: `e406d41`; branch: `codex/taatoru-sync-correctness`.
 Only Taatoru changed. The Tsurukame and Smouldering Durtles reference checkouts remain read-only.
 
 ## Implemented direction
@@ -34,7 +34,7 @@ Generated sequences exercise material durability. Dedicated API, session, accoun
 
 ## Verification record
 
-- Node 22: complete `npm run verify` passed after the device-discovered fixes: 68 Jest suites / 375 tests, plus 13 release-configuration tests; lint and TypeScript checks passed.
+- Node 22: complete `npm run verify` passed after the device-discovered fixes: 69 Jest suites / 393 tests, plus 13 release-configuration tests; lint and TypeScript checks passed.
 - `npx expo-doctor`: 21/21 checks passed.
 - `npm run prebuild:check`: passed; generated native directories remain ignored.
 - `npm run android -- --no-bundler --device Taatoru_Onboarding_API_36_1`: debug build/install passed (2m 24s).
@@ -50,4 +50,28 @@ This implementation does not claim server-supported exactly-once review delivery
 
 Local SRS stages remain approximate; pending work does not invent an authoritative next-review time. Background execution remains subject to OS scheduling and termination. Conditional reads and level-progression download efficiency remain follow-up work.
 
-Physical-device Android testing, iOS execution and extended OS-scheduled background/sleep testing have not been performed. Emulator fixtures and passing unit tests do not establish those results. Final release readiness remains conditional on these limits and the independent correctness review; this document is not a zero-defect guarantee.
+Physical-device Android testing, iOS execution, actual OS-worker interruption and extended OS-scheduled background/sleep testing have not been performed. The backwards-clock check uses an injected clock against actual native SQLite; it does not change the emulator system clock. Emulator fixtures and passing unit tests do not establish those results. The original implementation is complete with all identified Important review findings fixed and the complete gate passing. Physical-device/iOS/background limits remain; this document is not a zero-defect guarantee. The later requested material-conflict policy is a separate follow-up before publishing the final requested behavior.
+
+## Migration and rollback
+
+The version-2 migration adds control/operation metadata without rewriting version 1 or clearing cached account data. Tests cover populated migration, missing provenance, transactional rollback, reopen/idempotence and two connections. Legacy work without a provable baseline remains saved for attention. SQLite setup and the migration transaction both retry bounded contention.
+
+This is an additive forward migration, with no destructive downgrade. An older binary is not a supported rollback path for a database already using the new pending-operation semantics; preserve the database and repair forward. Fixture testing uses named temporary databases rather than clearing production data.
+
+## Independent review closure — 1 November 2026
+
+A fresh reviewer examined the complete original branch through `9d65896`, using source inspection and controlled SQLite probes. The reviewer found five Important issues and no Critical or Minor issues. All five were reproduced with permanent failing tests and fixed in one author pass:
+
+| Finding | Fix and regression |
+|---|---|
+| Interrupted token repair could clear the outbox | Continue/cancel candidate credentials without clearing account data; protect an activation racing cancellation. `credentialSlots.test.ts` |
+| Missing/inconsistent statistics could discard or resubmit progress | Require matching statistic identity and individual nondecreasing counters; supersession needs chronological due advancement or burning. `writeReconciliation.test.ts` |
+| Session wall time could misattribute pre-reset answers | Invalidate affected saved sessions on first reset discovery regardless of creation time. `preflight.test.ts` |
+| Retained study screens used stale synonyms | Refresh materials on focus and committed-data invalidation without recreating question/input state. `materialRefreshRoutes.test.tsx` |
+| Notifications could outlive sync ownership | Carry the lease guard into each notification side effect, including after permission lookup. `ownership.test.ts` |
+
+The legitimate first-review case remains deliverable when both statistic observations are absent at the initial stage and the assignment opportunity is unchanged. The [official API reference](https://docs.api.wanikani.com/20170710/#review-statistics) says statistics are created after the first review. Missing established evidence remains saved for attention.
+
+The final gate passed lint, TypeScript, 69 suites / 393 Jest tests and 13 release-configuration tests. Original Expo Doctor, prebuild, Android build and device checks were performed on 25 October; the final TypeScript review fixes were verified by the complete gate and focused SQLite/route tests on 1 November. Android device checks were not repeated after those fixes. The reviewer did not rerun the full suite or device gate, and did not review the subsequent fix diff a second time.
+
+Review exclusions were explicitly accepted: the later material-policy change, remote ordering/idempotency guarantees the API cannot provide, and exact OS-background/iOS parity. See the [implementation decisions](sync-implementation-decisions.md) for the complete record and costs.

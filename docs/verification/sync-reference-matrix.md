@@ -1,6 +1,6 @@
 # Synchronization reference and regression matrix
 
-Implementation verified 25 October 2026 from Taatoru e406d41. Baseline: 57 suites / 305 tests. Closing gate: 68 suites / 375 tests plus 13 release-configuration tests passed under Node 22; native evidence and limits are in [sync-correctness.md](sync-correctness.md). Reference source trees stay read-only.
+Implementation/device evidence 25 October 2026; final review fixes verified 1 November 2026 from Taatoru e406d41. Baseline: 57 suites / 305 tests. Closing gate: 69 suites / 393 tests plus 13 release-configuration tests passed under Node 22; native evidence and limits are in [sync-correctness.md](sync-correctness.md). Reference source trees stay read-only: Tsurukame `c3954c52b224250ba74763376a3ef0c2c86de0c2`; Smouldering Durtles `d8b0643a389babf67ffa815d021646caaed54245`.
 
 | Behavior | Reference protection / limitation | Taatoru release requirement | Evidence |
 |---|---|---|---|

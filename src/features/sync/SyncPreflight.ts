@@ -53,12 +53,13 @@ export class SyncPreflight {
         await tx.run('UPDATE sync_state SET assignments_updated_at = NULL, review_statistics_updated_at = NULL WHERE id = 1');
         await tx.run(`UPDATE pending_progress SET delivery_state = 'uncertain', next_attempt_at = NULL`);
         for (const reset of newResets) {
-          // Old prompts can carry attempts from the previous opportunity. Completed
-          // subjects already live in the outbox; unrelated sessions remain usable.
-          await tx.run(`DELETE FROM active_sessions WHERE julianday(created_at) <= julianday(?)
-            AND EXISTS(SELECT 1 FROM json_each(active_sessions.state_json, '$.items') i
+          // A session created offline after a remote reset can still use the old
+          // cache. Local wall time cannot prove it observed the new opportunity.
+          // On first discovery invalidate every affected saved session; completed
+          // subjects already live in the outbox and unrelated sessions remain.
+          await tx.run(`DELETE FROM active_sessions WHERE EXISTS(SELECT 1 FROM json_each(active_sessions.state_json, '$.items') i
               JOIN subjects s ON s.id = json_extract(i.value, '$.subjectId') WHERE s.level >= ?)`,
-          [reset.data.confirmed_at, reset.data.target_level]);
+          [reset.data.target_level]);
         }
       }
       await tx.run(`UPDATE sync_control SET resets_updated_at = ?, last_confirmed_reset_at = ? WHERE id = 1`,

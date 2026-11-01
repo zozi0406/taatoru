@@ -149,7 +149,8 @@ export class AuthManager {
     report?: InitialSyncReporter,
   ): Promise<Resource<UserData, 'user'>> {
     const token = await this.pendingToken();
-    await this.options.clearAccount();
+    // A pending slot can be a same-account repair with durable offline work.
+    // Revalidate its identity before deciding whether replacement is allowed.
     return this.login(token, report);
   }
 
@@ -160,7 +161,14 @@ export class AuthManager {
   }
 
   async useAnotherApiKey(): Promise<void> {
-    await this.removeAccount();
+    const control = new SyncControlRepository(this.options.db);
+    const reservation = await control.getPendingReservation();
+    if (reservation !== null) {
+      if (await control.cancelCredentialTransition(reservation))
+        await this.options.tokenStore.removeCredential(reservation.credentialKey);
+    }
+    // Returning to the token form is not consent to discard the cached account.
+    await this.options.tokenStore.removePending();
   }
 
   async logout(discardPending = false): Promise<void> {

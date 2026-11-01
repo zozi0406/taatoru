@@ -29,6 +29,10 @@ const mockRouter = {
 
 jest.mock('expo-router', () => ({
   useRouter: () => mockRouter,
+  useFocusEffect: (callback: () => void) => {
+    const React = jest.requireActual<typeof import('react')>('react');
+    React.useEffect(callback, [callback]);
+  },
 }));
 
 jest.mock('@/app/AppProviders', () => ({

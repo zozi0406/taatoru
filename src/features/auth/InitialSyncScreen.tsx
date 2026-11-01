@@ -375,8 +375,8 @@ function InterruptedSetupModal({
             Setup was interrupted
           </Text>
           <Text style={[styles.modalBody, { color: theme.colors.textMuted }]}>
-            Continue with the same account to discard the partial download and
-            restart the download from the beginning, or use a new API key.
+            Continue connecting to the same account, or enter a different API key.
+            Your saved progress stays on this device.
           </Text>
           <Pressable
             accessibilityRole="button"
