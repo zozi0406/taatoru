@@ -222,3 +222,19 @@ test.each(['success', 'failed-lookup', 'new-edit'] as const)('old material dispa
     if (kind === 'new-edit') expect(await db.first('SELECT meaning_note FROM pending_study_materials')).toEqual({ meaning_note: 'new local' });
   } finally { await db.close(); }
 });
+
+
+test('history blocked by a newer edit cannot bypass its retry deadline or spin on rejection', async () => {
+  const db = await syncDatabase();
+  try {
+    await db.run(`INSERT INTO sync_dispatches (operation_key, revision, queue_kind, subject_id, account_epoch,
+      payload_json, delivery_state, owner_fence) VALUES ('old-material', 1, 'material', 201, 0, '{}', 'uncertain', 1)`);
+    await new PendingWriteRepository(db).queueStudyMaterial(edit('new local'));
+    const future = '2026-11-02T12:00:00.000Z';
+    await db.run('UPDATE pending_study_materials SET next_attempt_at = ?', [future]);
+    const repository = new SyncRepository(db, () => SYNC_NOW);
+    expect((await repository.getQueueSummary()).nextAttemptAt).toBe(future);
+    await db.run("UPDATE pending_study_materials SET delivery_state = 'rejected', next_attempt_at = NULL");
+    expect(await repository.getQueueSummary()).toMatchObject({ pending: 2, rejected: 1, nextAttemptAt: null });
+  } finally { await db.close(); }
+});

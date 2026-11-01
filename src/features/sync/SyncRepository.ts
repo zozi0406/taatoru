@@ -182,11 +182,18 @@ export class SyncRepository implements SyncDataRepository {
         MIN(CASE WHEN delivery_state != 'rejected' THEN COALESCE(next_attempt_at, ?) END) AS nextAttemptAt FROM pending`,
       [this.now().toISOString()],
     ))!;
-    const orphan = (await this.db.first<{ n: number }>(`SELECT COUNT(DISTINCT subject_id) AS n FROM sync_dispatches d
-      WHERE queue_kind = 'material' AND NOT EXISTS (SELECT 1 FROM pending_study_materials p WHERE p.operation_key = d.operation_key)`))!.n;
+    const orphan = (await this.db.first<{ n: number; runnable: number }>(`SELECT COUNT(DISTINCT subject_id) AS n,
+      COUNT(DISTINCT CASE WHEN NOT EXISTS(SELECT 1 FROM pending_study_materials p WHERE p.subject_id = d.subject_id)
+        THEN subject_id END) AS runnable FROM sync_dispatches d
+      WHERE queue_kind = 'material' AND NOT EXISTS (SELECT 1 FROM pending_study_materials p WHERE p.operation_key = d.operation_key)`))!;
     const control = (await this.db.first<{ blocked_until: number }>('SELECT blocked_until FROM sync_control WHERE id = 1'))!;
-    return { ...row, pending: row.pending + orphan, uncertain: row.uncertain + orphan,
-      nextAttemptAt: row.nextAttemptAt === null && orphan === 0 ? null : new Date(Math.max(Date.parse(row.nextAttemptAt ?? this.now().toISOString()), control.blocked_until)).toISOString() };
+    // History for a subject with a newer pending edit cannot run ahead of that
+    // edit's retry/repair. Other orphan subjects can still be verified now.
+    const eligible = [row.nextAttemptAt, orphan.runnable > 0 ? this.now().toISOString() : null]
+      .filter((value): value is string => value !== null);
+    return { ...row, pending: row.pending + orphan.n, uncertain: row.uncertain + orphan.n,
+      nextAttemptAt: eligible.length === 0 ? null : new Date(Math.max(
+        Math.min(...eligible.map((value) => Date.parse(value))), control.blocked_until)).toISOString() };
   }
 
   async settleProgress(operation: PendingProgressOperation, resolution: Exclude<OperationResolution, { kind: 'retry' }>, now: Date): Promise<void> {
