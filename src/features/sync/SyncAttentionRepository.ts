@@ -1,8 +1,7 @@
 import type { Database } from '@/db/Database';
-import type { AssignmentData, IdentifiedResource, MaterialReceipt } from '@/api/types';
+import type { AssignmentData, IdentifiedResource, MaterialReceipt, ProgressReceipt } from '@/api/types';
 import { applyPendingState } from './PendingStateRepository';
 import { SyncRepository, TransactionDatabase } from './SyncRepository';
-import { PendingWriteRepository } from './PendingWriteRepository';
 
 export interface SavedChange {
   readonly operationKey: string;
@@ -13,6 +12,8 @@ export interface SavedChange {
   readonly state: string;
   readonly reason: string | null;
   readonly conflictJson: string | null;
+  readonly incorrectMeaningAnswers: number | null;
+  readonly incorrectReadingAnswers: number | null;
 }
 
 export class SyncAttentionRepository {
@@ -28,20 +29,20 @@ export class SyncAttentionRepository {
           AND d.revision = (SELECT MAX(x.revision) FROM sync_dispatches x WHERE x.operation_key = d.operation_key)
     ) SELECT c.operation_key AS operationKey, c.revision, c.subject_id AS subjectId,
       COALESCE(s.characters, s.slug, 'Subject ' || c.subject_id) AS title, c.kind, c.delivery_state AS state,
-      c.last_error_kind AS reason, c.conflict_json AS conflictJson
-      FROM changes c LEFT JOIN subjects s ON s.id = c.subject_id ORDER BY c.subject_id`);
+      c.last_error_kind AS reason, c.conflict_json AS conflictJson,
+      p.incorrect_meaning_answers AS incorrectMeaningAnswers, p.incorrect_reading_answers AS incorrectReadingAnswers
+      FROM changes c LEFT JOIN subjects s ON s.id = c.subject_id
+      LEFT JOIN pending_progress p ON p.operation_key = c.operation_key ORDER BY c.subject_id`);
   }
 
-  async resolve(change: SavedChange, choice: 'retry' | 'discard' | 'keep-local' | 'use-remote' | 'recover'): Promise<void> {
+  async resolve(change: SavedChange, choice: 'retry' | 'discard' | 'use-remote'): Promise<void> {
     if (change.kind === 'history') {
       await this.db.transaction(async (tx) => {
         const dispatch = await tx.first<{ payload_json: string }>('SELECT payload_json FROM sync_dispatches WHERE operation_key = ? AND revision = ?', [change.operationKey, change.revision]);
         const pending = await tx.first('SELECT subject_id FROM pending_study_materials WHERE subject_id = ?', [change.subjectId]);
         if (dispatch === null || pending !== null) throw new Error('Saved upload history changed');
-        if (choice === 'recover') {
-          const fields = JSON.parse(dispatch.payload_json) as { meaningNote: string | null; readingNote: string | null; meaningSynonyms: readonly string[] };
-          await new PendingWriteRepository(new TransactionDatabase(tx)).queueStudyMaterial({ subjectId: change.subjectId, ...fields, queuedAt: new Date() });
-        } else if (choice !== 'discard') throw new Error('Choose whether to restore or discard the saved version');
+        if (choice === 'retry') return;
+        if (choice !== 'discard') throw new Error('WaniKani is authoritative for materials');
         await tx.run('DELETE FROM sync_dispatches WHERE operation_key = ?', [change.operationKey]);
       });
       return;
@@ -53,22 +54,24 @@ export class SyncAttentionRepository {
       if (row === null) throw new Error('This saved change has changed. Reload and try again.');
       const repository = new SyncRepository(new TransactionDatabase(tx));
       const cursors = (await repository.getStateSnapshot()).cursors;
-      if (choice === 'keep-local') {
-        if (change.kind !== 'material' || row.conflict_json === null) throw new Error('No observed conflict to resolve');
-        const conflict = JSON.parse(row.conflict_json) as { remote: MaterialReceipt | null };
-        await tx.run(`UPDATE pending_study_materials SET source_json = ?, revision = revision + 1,
-          delivery_state = 'queued', conflict_json = NULL, last_error_kind = NULL, next_attempt_at = NULL
-          WHERE operation_key = ? AND revision = ?`, [JSON.stringify(conflict.remote), change.operationKey, change.revision]);
-      } else if (choice === 'retry') {
+      if (choice === 'retry') {
         await tx.run(`UPDATE ${table} SET delivery_state = 'queued', next_attempt_at = NULL
           WHERE operation_key = ? AND revision = ?`, [change.operationKey, change.revision]);
       } else {
         await tx.run(`DELETE FROM ${table} WHERE operation_key = ? AND revision = ?`, [change.operationKey, change.revision]);
         if (change.kind === 'progress') {
-          const resource = await tx.first<{ resource_json: string }>('SELECT resource_json FROM assignments WHERE subject_id = ?', [change.subjectId]);
-          if (resource !== null) await repository.replaceAssignments(
-            [JSON.parse(resource.resource_json) as IdentifiedResource<AssignmentData, 'assignment'>], cursors.assignments);
-          else await tx.run('DELETE FROM subject_progress WHERE subject_id = ?', [change.subjectId]);
+          const observed = choice === 'use-remote' && row.conflict_json !== null
+            ? (JSON.parse(row.conflict_json) as { remote?: ProgressReceipt }).remote : undefined;
+          if (observed !== undefined) {
+            if (observed.assignment.data.subject_id !== change.subjectId) throw new Error('Review identity changed');
+            await repository.replaceAssignments([observed.assignment], cursors.assignments);
+            if (observed.reviewStatistic !== undefined) await repository.replaceReviewStatistics([observed.reviewStatistic], cursors.reviewStatistics);
+          } else {
+            const resource = await tx.first<{ resource_json: string }>('SELECT resource_json FROM assignments WHERE subject_id = ?', [change.subjectId]);
+            if (resource !== null) await repository.replaceAssignments(
+              [JSON.parse(resource.resource_json) as IdentifiedResource<AssignmentData, 'assignment'>], cursors.assignments);
+            else await tx.run('DELETE FROM subject_progress WHERE subject_id = ?', [change.subjectId]);
+          }
         } else {
           const cached = await tx.first<{ resource_json: string; id: number }>('SELECT resource_json, id FROM study_materials WHERE subject_id = ?', [change.subjectId]);
           const conflict = row.conflict_json === null ? null : JSON.parse(row.conflict_json) as { remote: MaterialReceipt | null };

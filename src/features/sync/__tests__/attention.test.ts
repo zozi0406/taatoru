@@ -6,21 +6,16 @@ import { SyncAttentionRepository } from '../SyncAttentionRepository';
 import { SyncControlRepository } from '../SyncControlRepository';
 import { AccountDatabase } from '../FencedDatabase';
 
-test('explicit same-field resolution keeps the chosen local version and then delivers it', async () => {
+test('same-field materials adopt the API version without a local-or-remote decision', async () => {
   const db = await syncDatabase(); const api = new FixtureSyncApi();
   try {
     await new PendingWriteRepository(db).queueStudyMaterial({ subjectId: 201, meaningNote: 'local',
       readingNote: studyMaterialFixture.data.reading_note, meaningSynonyms: studyMaterialFixture.data.meaning_synonyms, queuedAt: SYNC_NOW });
     api.material = { ...studyMaterialFixture, data: { ...studyMaterialFixture.data, meaning_note: 'external' } };
-    const sender = new PendingWriteSender(db, api);
-    await sender.sendSelectedPendingWrites({ progressIds: [], studyMaterialIds: [201] }, SYNC_NOW);
-    const attention = new SyncAttentionRepository(db);
-    const change = (await attention.list())[0]!;
-    expect(change.reason).toBe('material-conflict');
-    await attention.resolve(change, 'keep-local');
-    await sender.sendSelectedPendingWrites({ progressIds: [], studyMaterialIds: [201] }, SYNC_NOW);
-    expect(api.material.data.meaning_note).toBe('local');
-    expect(await attention.list()).toEqual([]);
+    await new PendingWriteSender(db, api).sendSelectedPendingWrites({ progressIds: [], studyMaterialIds: [201] }, SYNC_NOW);
+    expect(await new SyncAttentionRepository(db).list()).toEqual([]);
+    expect(await db.first('SELECT meaning_note FROM study_materials')).toEqual({ meaning_note: 'external' });
+    expect(api.materialWrites).toHaveLength(0);
   } finally { await db.close(); }
 });
 

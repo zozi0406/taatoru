@@ -41,6 +41,15 @@ export class PendingWriteSender {
     now: Date,
     signal?: AbortSignal,
   ): Promise<void> {
+    const history = await this.db.all<{ operation_key: string; revision: number; subject_id: number }>(
+      `SELECT operation_key, MAX(revision) AS revision, subject_id FROM sync_dispatches d
+       WHERE queue_kind = 'material' AND NOT EXISTS (SELECT 1 FROM pending_study_materials p WHERE p.subject_id = d.subject_id)
+       GROUP BY operation_key, subject_id ORDER BY subject_id LIMIT 4`);
+    for (const saved of history) {
+      const remote = await this.api.findStudyMaterial(saved.subject_id, signal);
+      await new SyncRepository(this.db).adoptAuthoritativeMaterial(saved.subject_id, saved.operation_key,
+        saved.revision, remote, now, true);
+    }
     const progressRows = await this.selectedProgress(selection.progressIds);
     for (const progress of progressRows) {
       await this.sendProgress(progress, now, signal);
@@ -124,6 +133,11 @@ export class PendingWriteSender {
   ): Promise<void> {
     const reconciler = new WriteReconciler(this.db, this.api);
     const resolution = await reconciler.reconcileMaterial(material, signal);
+    if (resolution.kind === 'authoritative') {
+      await new SyncRepository(this.db).adoptAuthoritativeMaterial(material.subjectId, material.operationKey,
+        material.revision, resolution.remote, now);
+      return;
+    }
     if (resolution.kind === 'attention') {
       await this.db.run(`UPDATE pending_study_materials SET delivery_state = 'rejected', last_error_kind = ?, conflict_json = ?
         WHERE operation_key IS ? AND revision = ?`,

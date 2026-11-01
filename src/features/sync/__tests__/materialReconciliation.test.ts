@@ -1,6 +1,8 @@
 import { ApiError, NetworkError } from '@/api/errors';
 import { studyMaterialFixture } from '@/fixtures/api';
 import { FixtureSyncApi, SYNC_NOW, syncDatabase } from '@/test/sync/fixtures';
+import { StudyMaterialRepository } from '@/db/repositories/StudyMaterialRepository';
+import { SyncRepository } from '../SyncRepository';
 import { PendingWriteRepository } from '../PendingWriteRepository';
 import { PendingWriteSender } from '../PendingWriteSender';
 import { FencedDatabase } from '../FencedDatabase';
@@ -70,7 +72,7 @@ test('an older lost dispatch rebases a newer edit after restart', async () => {
   } finally { await db.close(); }
 });
 
-test.each([false, true])('remote and local %s same-field edits are merged or retained for a decision', async (sameField) => {
+test.each([false, true])('remote and local %s same-field edits use API authority or merge compatible fields', async (sameField) => {
   const db = await syncDatabase();
   const api = new FixtureSyncApi();
   try {
@@ -80,10 +82,8 @@ test.each([false, true])('remote and local %s same-field edits are merged or ret
     await new PendingWriteSender(db, api).sendSelectedPendingWrites(selection, SYNC_NOW);
     if (sameField) {
       expect(api.materialWrites).toHaveLength(0);
-      expect(await db.first('SELECT delivery_state, last_error_kind FROM pending_study_materials'))
-        .toEqual({ delivery_state: 'rejected', last_error_kind: 'material-conflict' });
-      const row = await db.first<{ conflict_json: string }>('SELECT conflict_json FROM pending_study_materials');
-      expect(JSON.parse(row!.conflict_json).remote.data.meaning_note).toBe('remote meaning');
+      expect(await db.first('SELECT COUNT(*) AS n FROM pending_study_materials')).toEqual({ n: 0 });
+      expect(await db.first('SELECT meaning_note FROM study_materials')).toEqual({ meaning_note: 'remote meaning' });
     } else {
       expect(api.material?.data).toMatchObject({ meaning_note: 'local meaning', reading_note: 'remote reading' });
       expect(await db.first('SELECT COUNT(*) AS n FROM pending_study_materials')).toEqual({ n: 0 });
@@ -155,5 +155,70 @@ test('a definitively rejected older revision does not leave false unresolved upl
     api.upsertStudyMaterial = accept;
     await new PendingWriteSender(db, api).sendSelectedPendingWrites(selection, SYNC_NOW);
     expect(await db.first('SELECT COUNT(*) AS n FROM sync_dispatches')).toEqual({ n: 0 });
+  } finally { await db.close(); }
+});
+
+
+test.each([false, true])('missing material baseline adopts verified API state: absent=%s', async (absent) => {
+  const db = await syncDatabase(); const api = new FixtureSyncApi();
+  try {
+    await new PendingWriteRepository(db).queueStudyMaterial(edit('legacy local'));
+    await db.run('UPDATE pending_study_materials SET source_json = NULL');
+    if (absent) api.material = null;
+    await new PendingWriteSender(db, api).sendSelectedPendingWrites(selection, SYNC_NOW);
+    expect(api.materialWrites).toHaveLength(0);
+    expect(await db.first('SELECT COUNT(*) AS n FROM pending_study_materials')).toEqual({ n: 0 });
+    expect(await db.first('SELECT meaning_note FROM study_materials'))
+      .toEqual(absent ? null : { meaning_note: api.material!.data.meaning_note });
+  } finally { await db.close(); }
+});
+
+test('an edit arriving during authoritative conflict lookup survives the old decision', async () => {
+  const db = await syncDatabase(); const api = new FixtureSyncApi();
+  try {
+    const writes = new PendingWriteRepository(db); await writes.queueStudyMaterial(edit('first local'));
+    api.findStudyMaterial = async () => {
+      await writes.queueStudyMaterial(edit('newer local'));
+      return { ...studyMaterialFixture, data: { ...studyMaterialFixture.data, meaning_note: 'remote' } };
+    };
+    await new PendingWriteSender(db, api).sendSelectedPendingWrites(selection, SYNC_NOW);
+    expect(await db.first('SELECT meaning_note FROM pending_study_materials')).toEqual({ meaning_note: 'newer local' });
+    expect(await db.first('SELECT meaning_note FROM study_materials')).toEqual({ meaning_note: 'newer local' });
+    expect(api.materialWrites).toHaveLength(0);
+  } finally { await db.close(); }
+});
+
+
+test('authoritative material reconciliation cannot roll back a newer cached API version', async () => {
+  const db = await syncDatabase(); const api = new FixtureSyncApi();
+  try {
+    await new StudyMaterialRepository(db).replaceStudyMaterials([{ ...studyMaterialFixture,
+      data_updated_at: '2026-11-01T12:00:00Z', data: { ...studyMaterialFixture.data, meaning_note: 'newer API' } }], null);
+    await new PendingWriteRepository(db).queueStudyMaterial(edit('local'));
+    await new PendingWriteSender(db, api).sendSelectedPendingWrites(selection, SYNC_NOW);
+    expect(await db.first('SELECT meaning_note FROM study_materials')).toEqual({ meaning_note: 'newer API' });
+    expect(await db.first('SELECT COUNT(*) AS n FROM pending_study_materials')).toEqual({ n: 0 });
+    expect(api.materialWrites).toHaveLength(0);
+  } finally { await db.close(); }
+});
+
+test.each(['success', 'failed-lookup', 'new-edit'] as const)('old material dispatch history is verified automatically: %s', async (kind) => {
+  const db = await syncDatabase(); const api = new FixtureSyncApi();
+  try {
+    await db.run(`INSERT INTO sync_dispatches (operation_key, revision, queue_kind, subject_id, account_epoch,
+      payload_json, delivery_state, owner_fence) VALUES ('old-material', 1, 'material', 201, 0, '{}', 'uncertain', 1)`);
+    api.findStudyMaterial = async () => {
+      if (kind === 'failed-lookup') throw new NetworkError('fixture offline');
+      if (kind === 'new-edit') await new PendingWriteRepository(db).queueStudyMaterial(edit('new local'));
+      return studyMaterialFixture;
+    };
+    const sender = new PendingWriteSender(db, api);
+    const attempt = sender.sendSelectedPendingWrites({ progressIds: [], studyMaterialIds: [] }, SYNC_NOW);
+    if (kind === 'failed-lookup') await expect(attempt).rejects.toThrow('fixture offline');
+    else await attempt;
+    expect(api.materialWrites).toHaveLength(0);
+    expect(await db.first('SELECT COUNT(*) AS n FROM sync_dispatches')).toEqual({ n: kind === 'success' ? 0 : 1 });
+    if (kind !== 'success') expect((await new SyncRepository(db).getQueueSummary()).nextAttemptAt).not.toBeNull();
+    if (kind === 'new-edit') expect(await db.first('SELECT meaning_note FROM pending_study_materials')).toEqual({ meaning_note: 'new local' });
   } finally { await db.close(); }
 });

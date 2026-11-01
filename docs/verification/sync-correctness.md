@@ -3,7 +3,9 @@
 Implementation/device evidence: 25 October 2026. Final review fixes verified: 1 November 2026. Implementation baseline: `e406d41`; branch: `codex/taatoru-sync-correctness`.
 Only Taatoru changed. The Tsurukame and Smouldering Durtles reference checkouts remain read-only.
 
-## Implemented direction
+Current conflict policy is documented in [sync-conflicts.md](sync-conflicts.md); it supersedes the original material-choice behavior below.
+
+## Original implemented direction
 
 - Additive schema v2 preserves v1 cache, pending payloads and saved sessions. Legacy operations with insufficient provenance remain visible for attention rather than being submitted blindly.
 - Local session completion, operation identity and projection commit atomically. Pending work overlays downloads and is excluded from lesson/review availability.
@@ -75,3 +77,9 @@ The legitimate first-review case remains deliverable when both statistic observa
 The final gate passed lint, TypeScript, 69 suites / 393 Jest tests and 13 release-configuration tests. Original Expo Doctor, prebuild, Android build and device checks were performed on 25 October; the final TypeScript review fixes were verified by the complete gate and focused SQLite/route tests on 1 November. Android device checks were not repeated after those fixes. The reviewer did not rerun the full suite or device gate, and did not review the subsequent fix diff a second time.
 
 Review exclusions were explicitly accepted: the later material-policy change, remote ordering/idempotency guarantees the API cannot provide, and exact OS-background/iOS parity. See the [implementation decisions](sync-implementation-decisions.md) for the complete record and costs.
+
+## Requested conflict policy follow-up — 1 November 2026
+
+The original checkpoint was `4f1b938`. The follow-up adopts API material state automatically on a same-field conflict or missing baseline, verifies orphan material histories without a version chooser, and preserves an unsent offline review when another app consumed its opportunity. Compatible material edits still upload. Review choices retain local evidence or explicitly use remote progress; old counts are never rebased into a later cycle. The [conflict-path guide](sync-conflicts.md) lists every entry point and attention reason. This supersedes the original material conflict policy described above.
+
+Follow-up verification: `npm run verify` passed lint, TypeScript, 70 Jest suites / 405 tests and 13 release-configuration tests. CI-pinned `expo-doctor@1.20.1` passed 20/20 checks, and `npm run prebuild:check` passed with no tracked native-project changes. Android fixture/device evidence remains dated 25 October; no device was attached for the 1 November follow-up.

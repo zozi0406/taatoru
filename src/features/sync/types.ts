@@ -81,6 +81,7 @@ export interface MaterialFields {
 }
 
 export type MaterialResolution =
+  | { readonly kind: 'authoritative'; readonly remote: import('@/api/types').MaterialReceipt | null }
   | { readonly kind: 'attention'; readonly reason: string; readonly conflictJson?: string }
   | { readonly kind: 'ready'; readonly fields: MaterialFields; readonly remote: import('@/api/types').MaterialReceipt | null;
       readonly matchedRevisions: readonly number[]; readonly satisfied: boolean };
@@ -88,7 +89,7 @@ export type MaterialResolution =
 export type OperationResolution =
   | { readonly kind: 'acknowledged' | 'superseded'; readonly receipt: import('@/api/types').ProgressReceipt; readonly reason: string }
   | { readonly kind: 'retry'; readonly wireCreatedAt: string }
-  | { readonly kind: 'attention'; readonly reason: string };
+  | { readonly kind: 'attention'; readonly reason: string; readonly conflictJson?: string };
 
 export interface QueueSummary {
   /** Total across all states, including future retries. */

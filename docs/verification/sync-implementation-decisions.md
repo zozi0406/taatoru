@@ -41,3 +41,10 @@ Original direction, closed 1 November 2026. Decisions are in execution order; co
 - Final: Ruling: exact OS scheduling and iOS parity remain unverified — Android emulator evidence cannot establish those environments — cost: physical-device and platform-specific background defects remain possible.
 
 Deferred minors: none.
+
+## Authorized conflict-policy follow-up
+
+- API authority uses the complete remote material when any same field conflicts; compatible changes still merge. Cost: another locally edited field can be discarded together with that conflicting material; no overwrite chooser is offered.
+- Orphan material histories are verified automatically and retired after successful lookup. Cost: an old PUT can still arrive later, and its effect follows subsequent API truth rather than a preserved-local restore action.
+- Proven remote progress preserves a review for a choice unless an uncertain/in-flight local dispatch could explain it. Cost: ambiguous previously dispatched work may be superseded without proving which client supplied the accepted counts.
+- Keeping a conflicting review retains its counts locally; it never replaces an accepted server review or creates a later-cycle attempt. Cost: the API cannot merge those historical counts into an already accepted review.

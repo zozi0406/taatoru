@@ -57,6 +57,9 @@ export class OwnedSyncEngine implements SyncEngine {
         },
       });
       const user = await new SyncPreflight(db, api, options.context).run(mode);
+      // Old builds may have persisted a material choice; API precedence now settles it.
+      await db.run(`UPDATE pending_study_materials SET delivery_state = 'queued', conflict_json = NULL,
+        last_error_kind = NULL, next_attempt_at = NULL WHERE last_error_kind = 'material-conflict'`);
       const engine = new SynchronizationEngine({
         api, repository: new SyncRepository(db, options.now), pendingWrites: new PendingWriteSender(db, api, ownedLease.ownerFence, user.data.subscription.max_level_granted),
         isOnline: options.isOnline, now: options.now,

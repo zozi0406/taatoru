@@ -17,8 +17,12 @@ export class WriteReconciler {
   constructor(private readonly db: Database, private readonly api: WaniKaniApi, private readonly maxLevelGranted?: number) {}
 
   async reconcileMaterial(operation: PendingMaterialOperation, signal?: AbortSignal): Promise<MaterialResolution> {
-    if (operation.sourceJson === null || operation.operationKey === null)
-      return { kind: 'attention', reason: 'unknown-baseline' };
+    if (operation.sourceJson === null || operation.operationKey === null) {
+      const remote = await this.api.findStudyMaterial(operation.subjectId, signal);
+      if (remote !== null && remote.data.subject_id !== operation.subjectId)
+        return { kind: 'attention', reason: 'material-identity-changed' };
+      return { kind: 'authoritative', remote };
+    }
     let baseline: MaterialReceipt | null;
     let local: MaterialFields;
     try {
@@ -51,8 +55,7 @@ export class WriteReconciler {
       else if (equal(current[field], original[field])) merged[field] = local[field];
       else conflicts.push(field);
     }
-    if (conflicts.length !== 0) return { kind: 'attention', reason: 'material-conflict',
-      conflictJson: JSON.stringify({ baseline, local, remote, dispatches, fields: conflicts }) };
+    if (conflicts.length !== 0) return { kind: 'authoritative', remote };
     const fields = merged as unknown as MaterialFields;
     return { kind: 'ready', fields, remote, matchedRevisions, satisfied: remote !== null && sameFields(fields, current) };
   }
@@ -99,8 +102,13 @@ export class WriteReconciler {
       const cycleChanged = before.available_at !== after.available_at || after.burned_at !== null;
       const dueAdvanced = before.available_at !== null && after.available_at !== null &&
         compareWaniKaniDates(after.available_at, before.available_at) > 0;
-      if (countersAdvanced && (dueAdvanced || after.burned_at !== null))
-        return { kind: 'superseded', receipt: { assignment, ...(statistic === null ? {} : { reviewStatistic: statistic }) }, reason: 'remote-progress-advanced' };
+      if (countersAdvanced && (dueAdvanced || after.burned_at !== null)) {
+        const receipt = { assignment, ...(statistic === null ? {} : { reviewStatistic: statistic }) };
+        const dispatched = await this.db.first(
+          "SELECT revision FROM sync_dispatches WHERE operation_key = ? AND queue_kind = 'progress' AND delivery_state IN ('in_flight', 'uncertain') LIMIT 1", [operation.operationKey]);
+        if (dispatched === null) return { kind: 'attention', reason: 'review-conflict', conflictJson: JSON.stringify({ remote: receipt }) };
+        return { kind: 'superseded', receipt, reason: 'remote-progress-advanced' };
+      }
       if (before.srs_stage !== after.srs_stage || cycleChanged || countersAdvanced || after.started_at === null)
         return attention('opportunity-changed');
     }

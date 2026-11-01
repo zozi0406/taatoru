@@ -5,6 +5,7 @@ import { PendingWriteRepository } from '../PendingWriteRepository';
 import { PendingWriteSender } from '../PendingWriteSender';
 import { FencedDatabase } from '../FencedDatabase';
 import { SyncControlRepository } from '../SyncControlRepository';
+import { SyncAttentionRepository } from '../SyncAttentionRepository';
 
 const selection = { progressIds: [201], studyMaterialIds: [] };
 async function queuedReview() {
@@ -206,5 +207,27 @@ test('a first review remains deliverable when both statistic observations are ab
     await new PendingWriteSender(db, api).sendSelectedPendingWrites(selection, SYNC_NOW);
     expect(api.reviews).toHaveLength(1);
     expect(await db.first('SELECT COUNT(*) AS n FROM pending_progress')).toEqual({ n: 0 });
+  } finally { await db.close(); }
+});
+
+
+test.each([null, 'queued', 'rejected'])('offline review overlapping remote progress needs a decision when no uncertain dispatch exists: %s', async (dispatchState) => {
+  const db = await queuedReview(); const api = new FixtureSyncApi();
+  try {
+    if (dispatchState !== null) await db.run(`INSERT INTO sync_dispatches (operation_key, revision, queue_kind,
+      subject_id, account_epoch, payload_json, delivery_state, owner_fence)
+      SELECT operation_key, revision, 'progress', subject_id, account_epoch, payload_json, ?, 1 FROM pending_progress`, [dispatchState]);
+    api.assignment = { ...api.assignment, data: { ...api.assignment.data, srs_stage: 3, available_at: '2026-10-25T14:00:00Z' } };
+    api.statistic = { ...api.statistic, data: { ...api.statistic.data, meaning_correct: api.statistic.data.meaning_correct + 1 } };
+    await new PendingWriteSender(db, api).sendSelectedPendingWrites(selection, SYNC_NOW);
+    expect(api.reviews).toHaveLength(0);
+    const attention = new SyncAttentionRepository(db);
+    const change = (await attention.list())[0]!;
+    expect(change).toMatchObject({ kind: 'progress', reason: 'review-conflict' });
+    expect(await db.first('SELECT incorrect_meaning_answers FROM pending_progress')).toEqual({ incorrect_meaning_answers: 1 });
+    await attention.resolve(change, 'use-remote');
+    expect(await attention.list()).toEqual([]);
+    expect(await db.first('SELECT srs_stage FROM subject_progress')).toEqual({ srs_stage: 3 });
+    expect(api.reviews).toHaveLength(0);
   } finally { await db.close(); }
 });
