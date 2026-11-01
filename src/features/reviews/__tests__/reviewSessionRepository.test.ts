@@ -18,6 +18,19 @@ import {
 
 const NOW = new Date('2026-07-29T12:00:00.000Z');
 
+test('an invalidated saved session cannot queue a completion through a late callback', async () => {
+  const db = await reviewDatabase();
+  try {
+    const repository = new ReviewSessionRepository(db);
+    const snapshot = await repository.startReviewSession([{ assignmentId: 501, subjectId: 201 }], NOW);
+    await repository.clearReviewSession();
+    await expect(repository.commitReviewTransition({ assignmentId: 501, subjectId: 201,
+      incorrectMeaningAnswers: 0, incorrectReadingAnswers: 0 }, completedSnapshot(snapshot),
+      new Date('2026-07-30T12:00:00Z'))).rejects.toThrow('availability changed');
+    expect(await rowCount(db, 'pending_progress')).toBe(0);
+  } finally { await db.close(); }
+});
+
 test('resuming replaces stale assignment IDs and resets only their attempts', async () => {
   const db = await reviewDatabase();
   try {
@@ -214,7 +227,7 @@ test('commits a completed review and next snapshot in one transaction', async ()
       NOW,
     );
 
-    await expect(rowCount(db, 'assignments')).resolves.toBe(0);
+    await expect(rowCount(db, 'assignments')).resolves.toBe(1);
     await expect(rowCount(db, 'pending_progress')).resolves.toBe(1);
     await expect(repository.loadReviewSession()).resolves.toEqual(next);
   } finally {

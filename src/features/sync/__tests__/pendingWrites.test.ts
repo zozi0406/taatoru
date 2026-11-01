@@ -7,12 +7,14 @@ import {
 import {
   assignmentFixture,
   kanjiFixture,
+  reviewStatisticFixture,
   studyMaterialFixture,
   userFixture,
 } from '@/fixtures/api';
 import { migrateDatabase } from '@/db/migrate';
 import { NodeTestDatabase } from '@/db/NodeTestDatabase';
 import { AssignmentRepository } from '@/db/repositories/AssignmentRepository';
+import { ReviewStatisticRepository } from '@/db/repositories/ReviewStatisticRepository';
 import { ResourceRepository } from '@/db/repositories/ResourceRepository';
 import { StudyMaterialRepository } from '@/db/repositories/StudyMaterialRepository';
 import { SubjectRepository } from '@/db/repositories/SubjectRepository';
@@ -20,6 +22,39 @@ import { PendingWriteRepository } from '../PendingWriteRepository';
 import { PendingWriteSender } from '../PendingWriteSender';
 
 const FIXED_NOW = new Date('2026-07-29T12:00:00.000Z');
+
+test('completion persists immutable identity, original opportunity, and projection', async () => {
+  const db = await reviewDatabase();
+  try {
+    await new PendingWriteRepository(db).completeReview({
+      assignmentId: 501, subjectId: 201, incorrectMeaningAnswers: 0,
+      incorrectReadingAnswers: 0, completedAt: FIXED_NOW,
+    });
+    const row = await db.first<{ operation_key: string; source_json: string; projection_json: string }>(
+      'SELECT operation_key, source_json, projection_json FROM pending_progress',
+    );
+    expect(row?.operation_key).toBe('0:1');
+    expect(JSON.parse(row!.source_json).assignment.data.srs_stage).toBe(2);
+    expect(JSON.parse(row!.projection_json).srsStage).toBe(3);
+  } finally { await db.close(); }
+});
+
+test('new material revisions retain their original server baseline', async () => {
+  const db = await reviewDatabase();
+  try {
+    await new StudyMaterialRepository(db).replaceStudyMaterials([studyMaterialFixture], null);
+    const writes = new PendingWriteRepository(db);
+    const material = { subjectId: 201, meaningNote: 'first', readingNote: null,
+      meaningSynonyms: ['local'], queuedAt: FIXED_NOW };
+    await writes.queueStudyMaterial(material);
+    await writes.queueStudyMaterial({ ...material, meaningNote: 'second' });
+    const row = await db.first<{ revision: number; source_json: string }>(
+      'SELECT revision, source_json FROM pending_study_materials',
+    );
+    expect(row?.revision).toBe(2);
+    expect(JSON.parse(row!.source_json)).toEqual(studyMaterialFixture);
+  } finally { await db.close(); }
+});
 
 test('queues a review and updates local state in one transaction', async () => {
   const db = await reviewDatabase();
@@ -52,7 +87,7 @@ test('queues a review and updates local state in one transaction', async () => {
       await db.first('SELECT id FROM assignments WHERE id = ?', [
         assignmentFixture.id,
       ]),
-    ).toBeNull();
+    ).toEqual({ id: assignmentFixture.id });
     expect(
       await db.first(
         `SELECT srs_stage AS srsStage, last_mistake_at AS lastMistakeAt
@@ -208,7 +243,7 @@ test('successful progress delivery removes the pending row', async () => {
   }
 });
 
-test('HTTP 422 drops stale progress and continues with the next item', async () => {
+test('HTTP 422 retains rejected progress and continues with the next item', async () => {
   const db = await pendingDatabase([
     pendingReview(201, 501, '2026-07-29T11:40:00.000Z'),
     pendingReview(202, 502, '2026-07-29T11:50:00.000Z'),
@@ -216,7 +251,7 @@ test('HTTP 422 drops stale progress and continues with the next item', async () 
   const api = writeApi();
   api.createReview
     .mockRejectedValueOnce(new ApiError('invalid assignment', { status: 422 }))
-    .mockResolvedValueOnce(undefined);
+    .mockResolvedValueOnce({ assignment: { ...assignmentFixture, id: 502, data: { ...assignmentFixture.data, subject_id: 202 } } });
   try {
     await new PendingWriteSender(db, api).sendSelectedPendingWrites(
       { progressIds: [201, 202], studyMaterialIds: [] },
@@ -224,7 +259,8 @@ test('HTTP 422 drops stale progress and continues with the next item', async () 
     );
 
     expect(api.createReview).toHaveBeenCalledTimes(2);
-    expect(await pendingProgressCount(db)).toBe(0);
+    expect(await pendingProgressCount(db)).toBe(1);
+    expect(await db.first('SELECT subject_id, delivery_state FROM pending_progress')).toEqual({ subject_id: 201, delivery_state: 'rejected' });
   } finally {
     await db.close();
   }
@@ -277,6 +313,8 @@ test('progress sends sequentially in creation order', async () => {
   const api = writeApi();
   api.createReview.mockImplementation(async ({ assignmentId }) => {
     events.push(assignmentId ?? -1);
+    return { assignment: { ...assignmentFixture, id: assignmentId ?? 501,
+      data: { ...assignmentFixture.data, subject_id: (assignmentId ?? 501) - 300 } } };
   });
   try {
     await new PendingWriteSender(db, api).sendSelectedPendingWrites(
@@ -290,7 +328,7 @@ test('progress sends sequentially in creation order', async () => {
   }
 });
 
-test('old reviews include createdAt while recent reviews omit it', async () => {
+test('both old and recent reviews include their fixed createdAt', async () => {
   const db = await pendingDatabase([
     pendingReview(201, 501, '2026-07-29T11:44:59.999Z'),
     pendingReview(202, 502, '2026-07-29T11:45:00.000Z'),
@@ -310,6 +348,7 @@ test('old reviews include createdAt while recent reviews omit it', async () => {
       assignmentId: 502,
       incorrectMeaningAnswers: 1,
       incorrectReadingAnswers: 0,
+      createdAt: new Date('2026-07-29T11:45:00.000Z'),
     });
   } finally {
     await db.close();
@@ -318,23 +357,17 @@ test('old reviews include createdAt while recent reviews omit it', async () => {
 
 test('study-material success removes its marker and failure preserves it', async () => {
   const db = await pendingDatabase([]);
-  await db.run(
-    `INSERT INTO pending_study_materials (
-      subject_id, study_material_id, meaning_note, reading_note,
-      meaning_synonyms_json, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?)`,
-    [201, 601, 'First', null, '["One"]', '2026-07-29T11:00:00.000Z'],
-  );
-  await db.run(
-    `INSERT INTO pending_study_materials (
-      subject_id, study_material_id, meaning_note, reading_note,
-      meaning_synonyms_json, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?)`,
-    [202, null, null, 'Second', '[]', '2026-07-29T11:01:00.000Z'],
-  );
+  await new SubjectRepository(db).replaceSubjects([kanjiFixture, { ...kanjiFixture, id: 202 }], null);
+  await new StudyMaterialRepository(db).replaceStudyMaterials([studyMaterialFixture], null);
+  const writes = new PendingWriteRepository(db);
+  await writes.queueStudyMaterial({ subjectId: 201, meaningNote: 'First', readingNote: null,
+    meaningSynonyms: ['One'], queuedAt: new Date('2026-07-29T11:00:00.000Z') });
+  await writes.queueStudyMaterial({ subjectId: 202, meaningNote: null, readingNote: 'Second',
+    meaningSynonyms: [], queuedAt: new Date('2026-07-29T11:01:00.000Z') });
   const api = writeApi();
+  jest.spyOn(api, 'findStudyMaterial').mockImplementation(async (id) => id === 201 ? studyMaterialFixture : null);
   api.upsertStudyMaterial
-    .mockResolvedValueOnce(undefined)
+    .mockResolvedValueOnce(studyMaterialFixture)
     .mockRejectedValueOnce(new NetworkError('offline'));
   try {
     await expect(
@@ -392,15 +425,15 @@ async function pendingDatabase(
 ): Promise<NodeTestDatabase> {
   const db = await NodeTestDatabase.open();
   await migrateDatabase(db);
+  await new ResourceRepository(db).replaceUser(userFixture);
   for (const row of rows) {
-    await db.run(
-      `INSERT INTO pending_progress (
-        subject_id, assignment_id, operation_kind,
-        incorrect_meaning_answers, incorrect_reading_answers,
-        created_at, payload_json
-      ) VALUES (?, ?, 'review', 1, 0, ?, '{}')`,
-      [row.subjectId, row.assignmentId, row.createdAt],
-    );
+    await new SubjectRepository(db).replaceSubjects([{ ...kanjiFixture, id: row.subjectId }], null);
+    await new AssignmentRepository(db).replaceAssignments([{ ...assignmentFixture, id: row.assignmentId,
+      data: { ...assignmentFixture.data, subject_id: row.subjectId, available_at: '2026-07-29T11:00:00.000Z' } }], null);
+    await new ReviewStatisticRepository(db).replaceReviewStatistics([{ ...reviewStatisticFixture,
+      id: row.subjectId + 10_000, data: { ...reviewStatisticFixture.data, subject_id: row.subjectId } }], null);
+    await new PendingWriteRepository(db).completeReview({ ...row, completedAt: new Date(row.createdAt),
+      incorrectMeaningAnswers: 1, incorrectReadingAnswers: 0 });
   }
   return db;
 }
@@ -415,12 +448,21 @@ async function pendingProgressCount(db: NodeTestDatabase): Promise<number> {
 
 function writeApi() {
   return {
-    startAssignment: jest.fn<Promise<void>, [Parameters<WaniKaniApi['startAssignment']>[0]]>(),
-    createReview: jest.fn<Promise<void>, [Parameters<WaniKaniApi['createReview']>[0]]>(),
-    upsertStudyMaterial: jest.fn<
-      Promise<void>,
-      [Parameters<WaniKaniApi['upsertStudyMaterial']>[0]]
-    >(),
+    rateLimit: { estimatedClockSkewMs: 0 },
+    getAssignment: jest.fn(async (id: number) => ({ ...assignmentFixture, id,
+      data: { ...assignmentFixture.data, subject_id: id - 300, available_at: '2026-07-29T11:00:00.000Z' } })),
+    findReviewStatistic: jest.fn(async (subjectId: number) => ({ ...reviewStatisticFixture,
+      id: subjectId + 10_000, data: { ...reviewStatisticFixture.data, subject_id: subjectId } })),
+    findStudyMaterial: jest.fn(async () => null),
+    startAssignment: jest.fn(async () => ({ assignment: assignmentFixture })),
+    createReview: jest.fn(async (input: Parameters<WaniKaniApi['createReview']>[0]) => ({ assignment: {
+      ...assignmentFixture, id: input.assignmentId ?? 501,
+      data: { ...assignmentFixture.data, subject_id: (input.assignmentId ?? 501) - 300 },
+    } })),
+    upsertStudyMaterial: jest.fn(async (input: Parameters<WaniKaniApi['upsertStudyMaterial']>[0]) => ({
+      ...studyMaterialFixture, data: { ...studyMaterialFixture.data, subject_id: input.subjectId,
+        meaning_note: input.meaningNote, reading_note: input.readingNote, meaning_synonyms: input.meaningSynonyms },
+    })),
   } as unknown as WaniKaniApi & {
     startAssignment: jest.MockedFunction<WaniKaniApi['startAssignment']>;
     createReview: jest.MockedFunction<WaniKaniApi['createReview']>;

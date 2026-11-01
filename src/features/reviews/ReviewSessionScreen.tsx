@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { SubjectResource } from '@/api/types';
 import {
   DEFAULT_STUDY_SETTINGS,
@@ -42,6 +42,8 @@ export function ReviewSessionScreen({
   onOpenSubject,
 }: ReviewSessionScreenProps) {
   const [snapshot, setSnapshot] = useState(initialSnapshot);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const playAudio = useStudyAudio(onPlayAudio);
   const types = Object.fromEntries(
     subjects.map((subject) => [subject.id, subject.object]),
@@ -53,6 +55,7 @@ export function ReviewSessionScreen({
     apply: async (type) => {
       const result = reduceReview(snapshot, { type }, types, settings);
       await onCommitTransition(result);
+      if (!mounted.current) return;
       setSnapshot(result.snapshot);
       const current = subjects.find(
         ({ id }) => id === snapshot.items[snapshot.queuePosition]?.subjectId,
@@ -102,9 +105,9 @@ export function ReviewSessionScreen({
       total={snapshot.items.length}
       subject={subject}
       prompt={snapshot.currentPrompt}
-      onExit={onExit}
-      onSettings={onSettings}
-      onOpenSubject={onOpenSubject}
+      onExit={() => actions.guard(onExit)}
+      onSettings={onSettings === undefined ? undefined : () => actions.guard(onSettings)}
+      onOpenSubject={onOpenSubject === undefined ? undefined : (id) => actions.guard(() => onOpenSubject(id))}
       onPlayAudio={playAudio}
       onSubmit={(answer) =>
         actions.submit(

@@ -1,3 +1,4 @@
+import { isOlderResource } from './resourceVersion';
 import type {
   IdentifiedResource,
   LevelProgressionData,
@@ -68,6 +69,7 @@ export class ResourceRepository {
   ): Promise<void> {
     return this.db.transaction(async (tx) => {
       for (const resource of resources) {
+        if (await isOlderResource(tx, 'voice_actors', resource.id, resource.data_updated_at)) continue;
         const data = resource.data;
         await tx.run(
           `INSERT INTO voice_actors (

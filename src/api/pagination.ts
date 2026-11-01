@@ -17,6 +17,7 @@
 // 8e18ddf7f12c44e91cb0ad63bab31af7440648ea.
 
 import { ApiDecodeError } from './errors';
+import { compareWaniKaniDates } from './date';
 import type {
   CollectionPage,
   IdentifiedResource,
@@ -46,6 +47,7 @@ export async function fetchAllPages<
   let lastPage: CollectionPage<T, TObject> | null = null;
 
   while (nextUrl !== null) {
+    if (signal?.aborted) throw signal.reason ?? new Error('Request cancelled');
     if (visitedUrls.has(nextUrl)) {
       throw new ApiDecodeError('WaniKani pagination repeated a page URL', {
         url: nextUrl,
@@ -66,91 +68,7 @@ export async function fetchAllPages<
     });
   }
 
-  return mergePages(firstPage, lastPage, resources);
-}
-
-interface SpeculativePaginationOptions<
-  T,
-  TObject extends WaniKaniObject,
-> {
-  readonly url: string;
-  readonly windows: number;
-  readonly perPage: number;
-  readonly fetchPage: PageFetcher<T, TObject>;
-  readonly signal?: AbortSignal;
-}
-
-export async function fetchSpeculativePages<
-  T,
-  TObject extends WaniKaniObject = WaniKaniObject,
->({
-  url,
-  windows,
-  perPage,
-  fetchPage,
-  signal,
-}: SpeculativePaginationOptions<T, TObject>): Promise<
-  CollectionPage<T, TObject>
-> {
-  if (!Number.isInteger(windows) || windows < 1) {
-    throw new RangeError('windows must be a positive integer');
-  }
-  if (!Number.isInteger(perPage) || perPage < 1) {
-    throw new RangeError('perPage must be a positive integer');
-  }
-
-  const controller = new AbortController();
-  const abortFromCaller = () => controller.abort(signal?.reason);
-  if (signal?.aborted === true) {
-    abortFromCaller();
-  } else {
-    signal?.addEventListener('abort', abortFromCaller, { once: true });
-  }
-
-  try {
-    const pagePromises = Array.from({ length: windows }, (_, index) => {
-      const pageUrl = new URL(url);
-      pageUrl.searchParams.set(
-        'page_after_id',
-        String(index * perPage - 1),
-      );
-
-      return fetchPage(pageUrl.toString(), controller.signal).catch(
-        (error: unknown) => {
-          controller.abort(error);
-          throw error;
-        },
-      );
-    });
-    const pages = await Promise.all(pagePromises);
-    const firstPage = pages[0];
-    const finalWindow = pages.at(-1);
-    if (firstPage === undefined || finalWindow === undefined) {
-      throw new ApiDecodeError('WaniKani pagination returned no pages', {
-        url,
-      });
-    }
-
-    let lastPage = finalWindow;
-    const resources = pages.flatMap((page) => page.data);
-    if (finalWindow.pages.next_url !== null) {
-      const tail = await fetchAllPages(
-        finalWindow.pages.next_url,
-        fetchPage,
-        controller.signal,
-      );
-      resources.push(...tail.data);
-      lastPage = tail;
-    }
-
-    return mergePages(
-      { ...firstPage, url },
-      lastPage,
-      deduplicateResources(resources),
-    );
-  } finally {
-    signal?.removeEventListener('abort', abortFromCaller);
-  }
+  return mergePages(firstPage, lastPage, deduplicateResources(resources));
 }
 
 function deduplicateResources<
@@ -159,14 +77,13 @@ function deduplicateResources<
 >(
   resources: readonly IdentifiedResource<T, TObject>[],
 ): IdentifiedResource<T, TObject>[] {
-  const seenIds = new Set<number>();
-  return resources.filter(({ id }) => {
-    if (seenIds.has(id)) {
-      return false;
-    }
-    seenIds.add(id);
-    return true;
-  });
+  const byId = new Map<number, IdentifiedResource<T, TObject>>();
+  for (const resource of resources) {
+    const previous = byId.get(resource.id);
+    if (previous === undefined || compareWaniKaniDates(resource.data_updated_at, previous.data_updated_at) >= 0)
+      byId.set(resource.id, resource);
+  }
+  return [...byId.values()];
 }
 
 function mergePages<
@@ -180,7 +97,7 @@ function mergePages<
   return {
     ...firstPage,
     pages: lastPage.pages,
-    data_updated_at: lastPage.data_updated_at ?? firstPage.data_updated_at,
+    data_updated_at: firstPage.data_updated_at,
     data,
   };
 }

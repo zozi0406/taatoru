@@ -28,6 +28,7 @@ import type {
   UserData,
   VoiceActorData,
   AssignmentData,
+  MaterialReceipt,
 } from '@/api/types';
 import type {
   Database,
@@ -40,8 +41,11 @@ import { ResourceRepository } from '@/db/repositories/ResourceRepository';
 import { ReviewStatisticRepository } from '@/db/repositories/ReviewStatisticRepository';
 import { StudyMaterialRepository } from '@/db/repositories/StudyMaterialRepository';
 import { SubjectRepository } from '@/db/repositories/SubjectRepository';
+import { compareWaniKaniDates } from '@/api/date';
 import { mergeRecentMistakes } from './recentMistakes';
-import type { RecentMistake } from './types';
+import { SyncControlRepository } from './SyncControlRepository';
+import type { RecentMistake, PendingProgressOperation, OperationResolution, PendingMaterialOperation, QueueSummary } from './types';
+import { applyPendingState } from './PendingStateRepository';
 
 export interface SyncCursors {
   readonly assignments: string | null;
@@ -159,12 +163,131 @@ export class SyncRepository implements SyncDataRepository {
   private readonly studyMaterials: StudyMaterialRepository;
   private readonly subjects: SubjectRepository;
 
-  constructor(private readonly db: Database) {
+  constructor(private readonly db: Database, private readonly now: () => Date = () => new Date()) {
     this.assignments = new AssignmentRepository(db);
     this.resources = new ResourceRepository(db);
     this.reviewStatistics = new ReviewStatisticRepository(db);
     this.studyMaterials = new StudyMaterialRepository(db);
     this.subjects = new SubjectRepository(db);
+  }
+
+  async getQueueSummary(): Promise<QueueSummary> {
+    const row = (await this.db.first<{ pending: number; uncertain: number; rejected: number; nextAttemptAt: string | null }>(
+      `WITH pending AS (
+        SELECT delivery_state, next_attempt_at FROM pending_progress UNION ALL
+        SELECT delivery_state, next_attempt_at FROM pending_study_materials
+      ) SELECT COUNT(*) AS pending,
+        COALESCE(SUM(delivery_state IN ('uncertain', 'in_flight')), 0) AS uncertain,
+        COALESCE(SUM(delivery_state = 'rejected'), 0) AS rejected,
+        MIN(CASE WHEN delivery_state != 'rejected' THEN COALESCE(next_attempt_at, ?) END) AS nextAttemptAt FROM pending`,
+      [this.now().toISOString()],
+    ))!;
+    const orphan = (await this.db.first<{ n: number; runnable: number }>(`SELECT COUNT(DISTINCT subject_id) AS n,
+      COUNT(DISTINCT CASE WHEN NOT EXISTS(SELECT 1 FROM pending_study_materials p WHERE p.subject_id = d.subject_id)
+        THEN subject_id END) AS runnable FROM sync_dispatches d
+      WHERE queue_kind = 'material' AND NOT EXISTS (SELECT 1 FROM pending_study_materials p WHERE p.operation_key = d.operation_key)`))!;
+    const control = (await this.db.first<{ blocked_until: number }>('SELECT blocked_until FROM sync_control WHERE id = 1'))!;
+    // History for a subject with a newer pending edit cannot run ahead of that
+    // edit's retry/repair. Other orphan subjects can still be verified now.
+    const eligible = [row.nextAttemptAt, orphan.runnable > 0 ? this.now().toISOString() : null]
+      .filter((value): value is string => value !== null);
+    return { ...row, pending: row.pending + orphan.n, uncertain: row.uncertain + orphan.n,
+      nextAttemptAt: eligible.length === 0 ? null : new Date(Math.max(
+        Math.min(...eligible.map((value) => Date.parse(value))), control.blocked_until)).toISOString() };
+  }
+
+  async settleProgress(operation: PendingProgressOperation, resolution: Exclude<OperationResolution, { kind: 'retry' }>, now: Date): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      if (resolution.kind === 'attention') {
+        await tx.run(`UPDATE pending_progress SET delivery_state = 'rejected', last_error_kind = ?, conflict_json = ?, next_attempt_at = NULL
+          WHERE operation_key IS ? AND revision = ?`, [resolution.reason, resolution.conflictJson ?? null, operation.operationKey, operation.revision]);
+        await tx.run(`UPDATE sync_dispatches SET delivery_state = 'rejected' WHERE operation_key IS ? AND revision = ?`,
+          [operation.operationKey, operation.revision]);
+        return;
+      }
+      await tx.run('DELETE FROM pending_progress WHERE operation_key = ? AND revision = ?', [operation.operationKey, operation.revision]);
+      const repository = new SyncRepository(new TransactionDatabase(tx));
+      const cursors = (await repository.getStateSnapshot()).cursors;
+      await repository.replaceAssignments([resolution.receipt.assignment], cursors.assignments);
+      if (resolution.receipt.reviewStatistic !== undefined)
+        await repository.replaceReviewStatistics([resolution.receipt.reviewStatistic], cursors.reviewStatistics);
+      await tx.run(`DELETE FROM sync_dispatches WHERE operation_key = ? AND revision = ?`, [operation.operationKey, operation.revision]);
+      await tx.run(`INSERT INTO sync_outcomes (account_epoch, operation_key, revision, outcome, reason, occurred_at)
+        VALUES (?, ?, ?, ?, ?, ?)`, [operation.accountEpoch, operation.operationKey, operation.revision, resolution.kind, resolution.reason, now.toISOString()]);
+      await tx.run('DELETE FROM sync_outcomes WHERE id NOT IN (SELECT id FROM sync_outcomes ORDER BY id DESC LIMIT 200)');
+      await applyPendingState(tx);
+    });
+  }
+
+  /** Apply user-authorized API precedence only to the exact inspected revision. */
+  async adoptAuthoritativeMaterial(
+    subjectId: number, operationKey: string | null, revision: number, remote: MaterialReceipt | null, now: Date,
+    history = false,
+  ): Promise<void> {
+    if (remote !== null && (remote.data.subject_id !== subjectId || remote.id <= 0)) throw new Error('Invalid material identity');
+    await this.db.transaction(async (tx) => {
+      if (history) {
+        if (await tx.first('SELECT subject_id FROM pending_study_materials WHERE subject_id = ?', [subjectId]) !== null) return;
+        const latest = await tx.first<{ revision: number }>(
+          'SELECT MAX(revision) AS revision FROM sync_dispatches WHERE operation_key IS ?', [operationKey]);
+        if (latest?.revision !== revision) return;
+      } else {
+        const removed = await tx.run('DELETE FROM pending_study_materials WHERE operation_key IS ? AND revision = ? AND subject_id = ?',
+          [operationKey, revision, subjectId]);
+        if (removed.changes !== 1) return;
+      }
+      const repository = new SyncRepository(new TransactionDatabase(tx));
+      const cursors = (await repository.getStateSnapshot()).cursors;
+      let authoritative = remote;
+      const cached = await tx.first<{ id: number; resource_json: string }>(
+        'SELECT id, resource_json FROM study_materials WHERE subject_id = ?', [subjectId]);
+      if (authoritative !== null && cached !== null && cached.id > 0) {
+        const previous = JSON.parse(cached.resource_json) as MaterialReceipt;
+        if (compareWaniKaniDates(previous.data_updated_at, authoritative.data_updated_at) > 0) authoritative = previous;
+      }
+      await tx.run('DELETE FROM study_materials WHERE subject_id = ?', [subjectId]);
+      await tx.run("UPDATE subjects_fts SET synonyms = '' WHERE subject_id = ?", [subjectId]);
+      if (authoritative !== null) await repository.replaceStudyMaterials([authoritative], cursors.studyMaterials);
+      await tx.run('DELETE FROM sync_dispatches WHERE operation_key IS ?', [operationKey]);
+      if (operationKey !== null) {
+        const epoch = (await tx.first<{ account_epoch: number }>('SELECT account_epoch FROM sync_control WHERE id = 1'))!.account_epoch;
+        await tx.run(`INSERT INTO sync_outcomes (account_epoch, operation_key, revision, outcome, reason, occurred_at)
+          VALUES (?, ?, ?, 'superseded', 'api-authoritative-material', ?)`, [epoch, operationKey, revision, now.toISOString()]);
+        await tx.run('DELETE FROM sync_outcomes WHERE id NOT IN (SELECT id FROM sync_outcomes ORDER BY id DESC LIMIT 200)');
+      }
+      await applyPendingState(tx);
+    });
+  }
+
+  async settleMaterial(operation: PendingMaterialOperation, receipt: MaterialReceipt, now: Date, observed: readonly number[] = []): Promise<void> {
+    if (receipt.data.subject_id !== operation.subjectId || receipt.id <= 0) throw new Error('Invalid material receipt');
+    await this.db.transaction(async (tx) => {
+      await tx.run('DELETE FROM pending_study_materials WHERE operation_key = ? AND revision = ?', [operation.operationKey, operation.revision]);
+      // A successful older revision establishes identity/baseline, never newer desired values.
+      await tx.run(`UPDATE pending_study_materials SET study_material_id = ?, source_json = ?
+        WHERE operation_key = ? AND revision > ?`, [receipt.id, JSON.stringify(receipt), operation.operationKey, operation.revision]);
+      const repository = new SyncRepository(new TransactionDatabase(tx));
+      const cursors = (await repository.getStateSnapshot()).cursors;
+      await repository.replaceStudyMaterials([receipt], cursors.studyMaterials);
+      for (const revision of observed) await tx.run('DELETE FROM sync_dispatches WHERE operation_key = ? AND revision = ?',
+        [operation.operationKey, revision]);
+      await tx.run(`DELETE FROM sync_dispatches WHERE operation_key = ? AND revision < ? AND delivery_state IN ('queued', 'rejected')`,
+        [operation.operationKey, operation.revision]);
+      const unresolved = await tx.first(`SELECT revision FROM sync_dispatches WHERE operation_key = ? AND revision < ? LIMIT 1`,
+        [operation.operationKey, operation.revision]);
+      if (unresolved === null) {
+        await tx.run('DELETE FROM sync_dispatches WHERE operation_key = ? AND revision = ?', [operation.operationKey, operation.revision]);
+      } else {
+        // Keep the newer values recoverable if an expired owner's PUT arrives late.
+        await tx.run("UPDATE sync_dispatches SET delivery_state = 'acknowledged' WHERE operation_key = ? AND revision = ?",
+          [operation.operationKey, operation.revision]);
+      }
+      await tx.run(`INSERT INTO sync_outcomes (account_epoch, operation_key, revision, outcome, reason, occurred_at)
+        VALUES (?, ?, ?, 'acknowledged', 'material-receipt-or-observed-values', ?)`,
+      [operation.accountEpoch, operation.operationKey, operation.revision, now.toISOString()]);
+      await tx.run('DELETE FROM sync_outcomes WHERE id NOT IN (SELECT id FROM sync_outcomes ORDER BY id DESC LIMIT 200)');
+      await applyPendingState(tx);
+    });
   }
 
   async getStateSnapshot(): Promise<SyncStateSnapshot> {
@@ -183,12 +306,16 @@ export class SyncRepository implements SyncDataRepository {
     const progress = await this.db.all<SubjectIdRow>(
       `SELECT subject_id AS subjectId
        FROM pending_progress
+       WHERE delivery_state IN ('queued', 'uncertain') AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
        ORDER BY created_at, subject_id`,
+      [this.now().toISOString()],
     );
     const studyMaterials = await this.db.all<SubjectIdRow>(
       `SELECT subject_id AS subjectId
        FROM pending_study_materials
+       WHERE delivery_state IN ('queued', 'uncertain') AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
        ORDER BY created_at, subject_id`,
+      [this.now().toISOString()],
     );
 
     return {
@@ -409,42 +536,11 @@ export class SyncRepository implements SyncDataRepository {
   }
 
   async clearForLogout(): Promise<void> {
-    await this.db.transaction(async (tx) => {
-      for (const table of [
-        'assignments',
-        'pending_progress',
-        'pending_study_materials',
-        'study_materials',
-        'review_statistics',
-        'audio_urls',
-        'subject_progress',
-        'subjects_fts',
-        'subjects',
-        'voice_actors',
-        'level_progressions',
-        'user',
-        'recent_mistakes',
-        'sync_errors',
-        'active_sessions',
-      ]) {
-        await tx.run(`DELETE FROM ${table}`);
-      }
-      await tx.run(
-        `UPDATE sync_state SET
-          assignments_updated_at = NULL,
-          study_materials_updated_at = NULL,
-          subjects_updated_at = NULL,
-          voice_actors_updated_at = NULL,
-          review_statistics_updated_at = NULL,
-          last_full_sync_at = NULL,
-          last_sync_at = NULL
-         WHERE id = 1`,
-      );
-    });
+    await new SyncControlRepository(this.db).invalidateAccount();
   }
 }
 
-class TransactionDatabase implements Database {
+export class TransactionDatabase implements Database {
   constructor(private readonly tx: DatabaseTransaction) {}
 
   run(

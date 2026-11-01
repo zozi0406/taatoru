@@ -7,6 +7,7 @@ import {
   HIBERNATION_SYNC_DETAIL,
 } from '@/features/auth/AccountHibernationNotice';
 import type { SyncResult } from '@/features/sync/SyncEngine';
+import type { SyncStore } from '@/features/sync/syncStore';
 import { BrandWordmark, PageHeading } from '@/ui/components/PageHeading';
 import { useScreenPadding } from '@/ui/theme/useScreenPadding';
 import { DashboardSections, type DashboardSection } from './DashboardSections';
@@ -21,6 +22,10 @@ interface HomeScreenProps {
   readonly onPickLessons?: () => void;
   readonly onStartLessons?: () => void;
   readonly onStartReviews?: () => void;
+  readonly syncStore?: SyncStore;
+  readonly subscribeToData?: (listener: () => void) => () => void;
+  readonly onSyncAttention?: () => void;
+  readonly onSignOut?: () => void;
 }
 
 export function HomeScreen({
@@ -29,6 +34,7 @@ export function HomeScreen({
   onPickLessons,
   onStartLessons,
   onStartReviews,
+  syncStore, subscribeToData, onSyncAttention, onSignOut,
 }: HomeScreenProps) {
   const theme = useTheme();
   const screenPadding = useScreenPadding();
@@ -36,10 +42,33 @@ export function HomeScreen({
   const [refreshing, setRefreshing] = useState(false);
   const [syncState, setSyncState] = useState<SyncStatusState>('idle');
   const [syncDetail, setSyncDetail] = useState<string>();
+  const [hibernating, setHibernating] = useState(false);
+  const [queue, setQueue] = useState<SyncResult['queue']>();
 
   const reload = useCallback(async () => {
     setSnapshot(await loadSnapshot());
   }, [loadSnapshot]);
+
+  useEffect(() => subscribeToData?.(() => { void reload().catch(() => {}); }), [reload, subscribeToData]);
+  useEffect(() => {
+    if (syncStore === undefined) return;
+    const update = () => {
+      const state = syncStore.getState();
+      if (state.isSyncing) { setSyncState('syncing'); return; }
+      const result = state.lastResult;
+      if (result !== null) {
+        setQueue(result.queue);
+        if (result.status === 'completed') {
+          setSyncState(result.delivery === 'attention' ? 'attention' : (result.queue?.pending ?? 0) > 0 ? 'pending' : 'completed');
+          setSyncDetail((result.queue?.pending ?? 0) > 0 ? `${result.queue!.pending} changes still waiting to upload` : 'Local library updated');
+        } else if (result.status === 'failed') {
+          setSyncState('attention'); setSyncDetail(result.error.message);
+          setHibernating(result.error.hibernating);
+        }
+      }
+    };
+    update(); return syncStore.subscribe(update);
+  }, [syncStore]);
   useEffect(() => {
     let active = true;
     void loadSnapshot().then((loadedSnapshot) => {
@@ -61,9 +90,10 @@ export function HomeScreen({
       );
       try {
         const result = await synchronize(mode);
+        setQueue(result.queue); setHibernating(false);
         if (result.status === 'completed') {
-          setSyncState('completed');
-          setSyncDetail(`${result.updatedResources} resources updated`);
+          setSyncState(result.delivery === 'attention' ? 'attention' : (result.queue?.pending ?? 0) > 0 ? 'pending' : 'completed');
+          setSyncDetail((result.queue?.pending ?? 0) > 0 ? `${result.queue!.pending} changes still waiting to upload` : `${result.updatedResources} resources updated`);
         } else if (result.status === 'skipped') {
           setSyncState('idle');
           setSyncDetail(
@@ -75,6 +105,7 @@ export function HomeScreen({
           const hibernating =
             result.error.status === 403 && result.error.hibernating;
           setSyncState(hibernating ? 'attention' : 'failed');
+          setHibernating(hibernating);
           setSyncDetail(
             hibernating ? HIBERNATION_SYNC_DETAIL : result.error.message,
           );
@@ -151,8 +182,17 @@ export function HomeScreen({
               </Text>
             }
           />
-          {syncState === 'attention' ? (
+          {hibernating ? (
             <AccountHibernationNotice onRetry={() => void runSync('quick')} />
+          ) : null}
+          {(queue?.uncertain ?? 0) > 0 || (queue?.rejected ?? 0) > 0 ? (
+            <SyncStatus state="attention" detail={`${queue?.uncertain ?? 0} uploads need verification; ${queue?.rejected ?? 0} need a decision`}
+              onPress={onSyncAttention} />
+          ) : null}
+          {(snapshot?.pendingWriteCount ?? 0) > 0 && onSyncAttention !== undefined ? (
+            <Pressable accessibilityRole="button" onPress={onSyncAttention} style={{ minHeight: 48, justifyContent: 'center' }}>
+              <Text style={{ color: theme.colors.accent }}>Review saved changes</Text>
+            </Pressable>
           ) : null}
           {snapshot?.vacationActive ? (
             <SyncStatus
@@ -233,6 +273,9 @@ export function HomeScreen({
           >
             TAATORU · YOUR WANIKANI COMPANION
           </Text>
+          {onSignOut === undefined ? null : <Pressable accessibilityRole="button" onPress={onSignOut} style={{ minHeight: 48, justifyContent: 'center' }}>
+            <Text style={{ color: theme.colors.textMuted }}>Sign out</Text>
+          </Pressable>}
         </View>
       }
       renderItem={({ item }) =>

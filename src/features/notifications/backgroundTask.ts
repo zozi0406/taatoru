@@ -3,12 +3,14 @@ import * as Network from 'expo-network';
 import * as TaskManager from 'expo-task-manager';
 
 import { HttpWaniKaniApi } from '@/api/HttpWaniKaniApi';
+import { RequestScheduler } from '@/api/RequestScheduler';
+import { SyncCoordinator } from '@/features/sync/SyncCoordinator';
+import { AccountDatabase } from '@/features/sync/FencedDatabase';
 import { ExpoDatabase } from '@/db/ExpoDatabase';
 import { migrateDatabase } from '@/db/migrate';
 import { SecureTokenStore } from '@/features/auth/tokenStore';
-import { PendingWriteSender } from '@/features/sync/PendingWriteSender';
-import { SynchronizationEngine } from '@/features/sync/SyncEngine';
-import { SyncRepository } from '@/features/sync/SyncRepository';
+import { OwnedSyncEngine } from '@/features/sync/OwnedSyncEngine';
+import { SyncControlRepository } from '@/features/sync/SyncControlRepository';
 import {
   ExpoNotificationPlatform,
   loadReviewNotificationInput,
@@ -37,18 +39,22 @@ export async function runBackgroundQuickSync(): Promise<boolean> {
   const db = await ExpoDatabase.open();
   try {
     await migrateDatabase(db);
-    const token = await new SecureTokenStore().get();
-    if (token === null) {
+    const token = await new SecureTokenStore(db).get();
+    const context = await new SyncControlRepository(db).getAccountContext();
+    if (token === null || context === null) {
       return true;
     }
-    const api = new HttpWaniKaniApi({ token });
     const notificationService = new NotificationService(
       new ExpoNotificationPlatform(),
     );
-    const engine = new SynchronizationEngine({
-      api,
-      repository: new SyncRepository(db),
-      pendingWrites: new PendingWriteSender(db, api),
+    const deadlineAt = Date.now() + 20_000;
+    const engine = new OwnedSyncEngine({
+      db, context, apiFactory: (lease, signal) => {
+        const scheduler = new RequestScheduler(db, { deadlineAt });
+        return new HttpWaniKaniApi({ token, signal,
+          schedule: (operation, requestSignal) => scheduler.run(operation, lease, requestSignal),
+          onRateLimit: (budget) => scheduler.recordBudget(budget, lease) });
+      },
       isOnline: async () => {
         const network = await Network.getNetworkStateAsync();
         return (
@@ -59,14 +65,20 @@ export async function runBackgroundQuickSync(): Promise<boolean> {
       invalidate: () => {
         //
       },
-      updateNotifications: async () => {
+      updateNotifications: async (assertOwner) => {
         await notificationService.rebuild(
-          await loadReviewNotificationInput(db, new Date()),
+          await loadReviewNotificationInput(new AccountDatabase(db, context), new Date()),
+          assertOwner,
         );
       },
       now: () => new Date(),
     });
-    return (await engine.synchronize('quick')).status !== 'failed';
+    const coordinator = new SyncCoordinator({ db, context, engine });
+    coordinator.setForeground(false);
+    try {
+      const result = await coordinator.request('background');
+      return result.status !== 'failed' || result.error.retryAt !== null;
+    } finally { coordinator.dispose(); }
   } finally {
     await db.close();
   }

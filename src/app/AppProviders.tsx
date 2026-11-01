@@ -17,7 +17,6 @@ import {
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { HttpWaniKaniApi } from '@/api/HttpWaniKaniApi';
-import type { WaniKaniApi } from '@/api/WaniKaniApi';
 import type { Database } from '@/db/Database';
 import { ExpoDatabase } from '@/db/ExpoDatabase';
 import { migrateDatabase } from '@/db/migrate';
@@ -27,8 +26,14 @@ import {
   useAuth,
 } from '@/features/auth/AuthProvider';
 import { SecureTokenStore, type TokenStore } from '@/features/auth/tokenStore';
-import { ConnectivityUploadRetry } from '@/features/connectivity/ConnectivityUploadRetry';
-import { PendingWriteSender } from '@/features/sync/PendingWriteSender';
+import { observeConnectivity } from '@/features/connectivity/observeConnectivity';
+import { RequestScheduler } from '@/api/RequestScheduler';
+import { SyncCoordinator } from '@/features/sync/SyncCoordinator';
+import { AccountDatabase } from '@/features/sync/FencedDatabase';
+import { createSyncStore, type SyncStore } from '@/features/sync/syncStore';
+import { OwnedSyncEngine } from '@/features/sync/OwnedSyncEngine';
+import { SyncControlRepository } from '@/features/sync/SyncControlRepository';
+import type { AccountContext } from '@/features/sync/types';
 import {
   ExpoNotificationPlatform,
   loadReviewNotificationInput,
@@ -39,7 +44,6 @@ import {
   type SyncEngine,
   type SyncMode,
   type SyncResult,
-  SynchronizationEngine,
 } from '@/features/sync/SyncEngine';
 import { SyncRepository } from '@/features/sync/SyncRepository';
 import { useTheme } from '@/ui/theme/ThemeProvider';
@@ -51,6 +55,10 @@ export interface AppServices {
   readonly isOnline: () => Promise<boolean>;
   readonly rebuildNotifications: () => Promise<void>;
   readonly synchronize: (mode: SyncMode) => Promise<SyncResult>;
+  readonly notifyPendingWrites: () => void;
+  readonly setForeground: (active: boolean) => void;
+  readonly syncStore: SyncStore;
+  readonly subscribeToData: (listener: () => void) => () => void;
 }
 
 const AppServicesContext = createContext<AppServices | null>(null);
@@ -64,6 +72,7 @@ export function AppProviders({ children }: PropsWithChildren) {
   useEffect(() => {
     let active = true;
     let database: Database | null = null;
+    let disposeRuntime = () => {};
     void (async () => {
       try {
         const openedDatabase = await ExpoDatabase.open();
@@ -74,16 +83,22 @@ export function AppProviders({ children }: PropsWithChildren) {
         database = openedDatabase;
         await migrateDatabase(openedDatabase);
         if (!active) return;
-        const tokenStore = new SecureTokenStore();
+        const tokenStore = new SecureTokenStore(openedDatabase);
         const syncRepository = new SyncRepository(openedDatabase);
         const notificationService = new NotificationService(
           new ExpoNotificationPlatform(),
         );
-        const rebuildNotifications = async () => {
+        const rebuildForAccount = async (expected?: AccountContext, assertOwner?: () => Promise<void>) => {
+          const control = new SyncControlRepository(openedDatabase);
+          const context = expected ?? await control.getLocalAccountContext();
+          if (context === null) return;
+          const assertCurrent = assertOwner ?? (() => control.assertAccount(openedDatabase, context));
+          await assertCurrent();
           await notificationService.rebuild(
-            await loadReviewNotificationInput(openedDatabase, new Date()),
+            await loadReviewNotificationInput(new AccountDatabase(openedDatabase, context), new Date()), assertCurrent,
           );
         };
+        const rebuildNotifications = () => rebuildForAccount();
         const isOnline = async () => {
           try {
             const network = await Network.getNetworkStateAsync();
@@ -95,23 +110,45 @@ export function AppProviders({ children }: PropsWithChildren) {
             return false;
           }
         };
-        const createSyncEngine = (api: WaniKaniApi): SyncEngine =>
-          new SynchronizationEngine({
-            api,
-            repository: syncRepository,
-            pendingWrites: new PendingWriteSender(openedDatabase, api),
-            isOnline,
-            invalidate: () => {
-              //
+        const control = new SyncControlRepository(openedDatabase);
+        const syncStore = createSyncStore();
+        const dataListeners = new Set<() => void>();
+        const invalidate = () => { for (const listener of dataListeners) listener(); };
+        let unsubscribeSync: (() => void) | undefined;
+        let runtimeToken: string | null = null;
+        let runtimeSyncEngine: SyncCoordinator | null = null;
+        let runtimeContextKey: string | null = null;
+        let foreground = false;
+        disposeRuntime = () => { runtimeSyncEngine?.dispose(); unsubscribeSync?.(); };
+        const createSyncEngine = (token: string, context: AccountContext): SyncEngine => {
+          const contextKey = `${context.accountEpoch}:${context.credentialRevision}`;
+          if (runtimeSyncEngine !== null && runtimeToken === token && runtimeContextKey === contextKey) return runtimeSyncEngine;
+          runtimeSyncEngine?.dispose();
+          unsubscribeSync?.();
+          const engine = new OwnedSyncEngine({
+            db: openedDatabase, context,
+            apiFactory: (lease, signal) => {
+              const scheduler = new RequestScheduler(openedDatabase);
+              return new HttpWaniKaniApi({ token, signal,
+                schedule: (operation, requestSignal) => scheduler.run(operation, lease, requestSignal),
+                onRateLimit: (budget) => scheduler.recordBudget(budget, lease),
+              });
             },
-            updateNotifications: rebuildNotifications,
+            isOnline, invalidate,
+            updateNotifications: (assertOwner) => rebuildForAccount(context, assertOwner),
             now: () => new Date(),
           });
-        let runtimeToken: string | null = null;
-        let runtimeSyncEngine: SyncEngine | null = null;
+          runtimeSyncEngine = new SyncCoordinator({ db: openedDatabase, context, engine });
+          unsubscribeSync = runtimeSyncEngine.store.subscribe((state) => syncStore.setState(state));
+          // AuthProvider owns initial-setup retry timing until the account opens.
+          runtimeSyncEngine.setForeground(foreground);
+          runtimeToken = token; runtimeContextKey = contextKey;
+          return runtimeSyncEngine;
+        };
         const synchronize = async (mode: SyncMode): Promise<SyncResult> => {
           const token = await tokenStore.get();
-          if (token === null) {
+          const context = await control.getAccountContext();
+          if (token === null || context === null) {
             return {
               status: 'failed',
               error: {
@@ -124,13 +161,7 @@ export function AppProviders({ children }: PropsWithChildren) {
               },
             };
           }
-          if (runtimeSyncEngine === null || runtimeToken !== token) {
-            runtimeToken = token;
-            runtimeSyncEngine = createSyncEngine(
-              new HttpWaniKaniApi({ token }),
-            );
-          }
-          return runtimeSyncEngine.synchronize(mode);
+          return createSyncEngine(token, context).synchronize(mode);
         };
         void registerReviewBackgroundTask().catch(() => {
           // Background execution is opportunistic and may be unavailable.
@@ -138,9 +169,22 @@ export function AppProviders({ children }: PropsWithChildren) {
         const manager = new AuthManager({
           db: openedDatabase,
           tokenStore,
-          apiFactory: (token) => new HttpWaniKaniApi({ token }),
+          apiFactory: (token, reservation) => {
+            if (reservation === undefined) throw new Error('Missing credential reservation');
+            const scheduler = new RequestScheduler(openedDatabase);
+            return new HttpWaniKaniApi({ token,
+              schedule: (operation, signal) => scheduler.run(operation, reservation, signal),
+              onRateLimit: (budget) => scheduler.recordBudget(budget, reservation),
+            });
+          },
           syncFactory: createSyncEngine,
-          clearAccount: () => syncRepository.clearForLogout(),
+          clearAccount: async () => {
+            await syncRepository.clearForLogout();
+            runtimeSyncEngine?.dispose(); unsubscribeSync?.();
+            syncStore.setState({ isSyncing: false, phase: 'idle', lastResult: null });
+            const platform = new ExpoNotificationPlatform();
+            await platform.cancelAll(); await platform.setBadge(0);
+          },
         });
         if (active) {
           setServices({
@@ -150,6 +194,10 @@ export function AppProviders({ children }: PropsWithChildren) {
             isOnline,
             rebuildNotifications,
             synchronize,
+            notifyPendingWrites: () => { invalidate(); runtimeSyncEngine?.notifyPendingWrites(); },
+            setForeground: (value) => { foreground = value; runtimeSyncEngine?.setForeground(value); },
+            syncStore,
+            subscribeToData: (listener) => { dataListeners.add(listener); return () => { dataListeners.delete(listener); }; },
           });
         }
       } catch (bootstrapError) {
@@ -169,6 +217,7 @@ export function AppProviders({ children }: PropsWithChildren) {
 
     return () => {
       active = false;
+      disposeRuntime();
       if (database !== null) {
         const closingDatabase = database;
         database = null;
@@ -183,10 +232,12 @@ export function AppProviders({ children }: PropsWithChildren) {
     }
     const subscription = AppState.addEventListener('change', (state) => {
       if (state === 'background') {
+        services.setForeground(false);
         void services.rebuildNotifications().catch(() => {
           // Notification refresh should not block the app entering background.
         });
       }
+      if (state === 'active') services.setForeground(true);
     });
     return () => {
       subscription.remove();
@@ -262,16 +313,33 @@ function AuthenticatedRuntime({
   services,
 }: PropsWithChildren<{ readonly services: AppServices }>) {
   const auth = useAuth();
+  const [accountServices, setAccountServices] = useState<{ version: number; services: AppServices; epoch: number } | null>(null);
+  useEffect(() => {
+    if (auth.status !== 'authenticated') return;
+    let active = true;
+    void new SyncControlRepository(services.db).getLocalAccountContext().then((context) => {
+      if (active && context !== null) setAccountServices({ version: auth.accountVersion, epoch: context.accountEpoch,
+        services: { ...services, db: new AccountDatabase(services.db, context), notifyPendingWrites: () => {
+          void new SyncControlRepository(services.db).assertAccount(services.db, context)
+            .then(() => services.notifyPendingWrites()).catch(() => {});
+        } } });
+    });
+    return () => { active = false; };
+  }, [auth.status, auth.accountVersion, services]);
+  useEffect(() => {
+    if (auth.status !== 'authenticated') { services.setForeground(false); return; }
+    services.setForeground(AppState.currentState !== 'background' && AppState.currentState !== 'inactive');
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const subscription = observeConnectivity((connected) => {
+      if (timer !== undefined) clearTimeout(timer);
+      if (connected) timer = setTimeout(() => { void services.synchronize('quick'); }, 2_000);
+    });
+    return () => { subscription.remove(); if (timer !== undefined) clearTimeout(timer); services.setForeground(false); };
+  }, [auth.status, services]);
   return (
-    <>
-      {auth.status === 'authenticated' ? (
-        <ConnectivityUploadRetry
-          db={services.db}
-          synchronize={services.synchronize}
-        />
-      ) : null}
-      {children}
-    </>
+    auth.status === 'authenticated' ? accountServices?.version === auth.accountVersion ?
+      <AppServicesContext key={accountServices.epoch} value={accountServices.services}>{children}</AppServicesContext> :
+      <ActivityIndicator accessibilityLabel="Opening your account" /> : <>{children}</>
   );
 }
 

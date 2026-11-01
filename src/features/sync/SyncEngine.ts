@@ -18,14 +18,13 @@
 
 import type { WaniKaniApi } from '@/api/WaniKaniApi';
 import { ApiDecodeError, ApiError, NetworkError } from '@/api/errors';
-import { selectPendingWrites } from './budget';
 import type {
   SafeSyncErrorRecord,
   SyncDataRepository,
   SyncStateSnapshot,
 } from './SyncRepository';
 import { createSyncStore, type SyncPhase, type SyncStore } from './syncStore';
-import type { SelectedPendingWrites } from './types';
+import type { SelectedPendingWrites, QueueSummary } from './types';
 
 export type SyncMode = 'quick' | 'full';
 
@@ -33,13 +32,13 @@ export interface SafeSyncError extends SafeSyncErrorRecord {
   readonly hibernating: boolean;
 }
 
-export type SyncResult =
+export type SyncResult = ({ readonly queue?: QueueSummary; readonly delivery?: 'complete' | 'pending' | 'attention' } & (
   | { readonly status: 'completed'; readonly updatedResources: number }
   | {
       readonly status: 'skipped';
       readonly reason: 'offline' | 'already-running';
     }
-  | { readonly status: 'failed'; readonly error: SafeSyncError };
+  | { readonly status: 'failed'; readonly error: SafeSyncError }));
 
 export interface SyncEngine {
   readonly store?: SyncStore;
@@ -135,22 +134,10 @@ export class SynchronizationEngine implements SyncEngine {
     const state = await this.options.repository.getStateSnapshot();
     const selectedWrites = this.selectWrites(state, mode);
     this.setPhase('phase-one');
-    await allOrThrow([
-      this.options.pendingWrites.sendSelectedPendingWrites(
-        { progressIds: selectedWrites.progressIds, studyMaterialIds: [] },
-        now,
-      ),
-      this.options.pendingWrites.sendSelectedPendingWrites(
-        {
-          progressIds: [],
-          studyMaterialIds: selectedWrites.studyMaterialIds,
-        },
-        now,
-      ),
-      this.options.api
+    await this.options.api
         .getUser()
-        .then((resource) => this.options.repository.replaceUser(resource)),
-    ]);
+        .then((resource) => this.options.repository.replaceUser(resource));
+    await this.options.pendingWrites.sendSelectedPendingWrites(selectedWrites, now);
     const refreshedState = await this.options.repository.getStateSnapshot();
     const subjects = await this.options.api.getSubjects(
       refreshedState.cursors.subjects,
@@ -235,20 +222,7 @@ export class SynchronizationEngine implements SyncEngine {
     const selectedWrites = this.selectWrites(state, 'full');
     this.setPhase('phase-one');
     const subjectsPromise = this.options.api.getSubjects(null);
-    await allOrThrow([
-      this.options.pendingWrites.sendSelectedPendingWrites(
-        { progressIds: selectedWrites.progressIds, studyMaterialIds: [] },
-        now,
-      ),
-      this.options.pendingWrites.sendSelectedPendingWrites(
-        {
-          progressIds: [],
-          studyMaterialIds: selectedWrites.studyMaterialIds,
-        },
-        now,
-      ),
-      subjectsPromise.then(() => undefined),
-    ]);
+    await allOrThrow([this.options.pendingWrites.sendSelectedPendingWrites(selectedWrites, now), subjectsPromise.then(() => undefined)]);
     const subjects = await subjectsPromise;
 
     this.setPhase('phase-two');
@@ -294,16 +268,11 @@ export class SynchronizationEngine implements SyncEngine {
 
   private selectWrites(
     state: SyncStateSnapshot,
-    mode: SyncMode,
+    _mode: SyncMode,
   ): SelectedPendingWrites {
-    return selectPendingWrites({
-      requestsRemaining: this.options.api.rateLimit.requestsRemaining,
-      assignmentUnits: mode === 'quick' ? 1 : 8,
-      subjectUnits: mode === 'quick' ? 1 : 20,
-      fixedUnits: 6,
-      progressIds: state.progressIds,
-      studyMaterialIds: state.studyMaterialIds,
-    });
+    // Bound uploads per refresh; request pacing handles the actual HTTP budget.
+    const progressIds = state.progressIds.slice(0, 4);
+    return { progressIds, studyMaterialIds: state.studyMaterialIds.slice(0, 8 - progressIds.length) };
   }
 
   private setPhase(phase: SyncPhase): void {
@@ -329,7 +298,7 @@ async function allOrThrow<T>(
   return results.map((result) => (result as PromiseFulfilledResult<T>).value);
 }
 
-function toSafeSyncError(error: unknown): SafeSyncError {
+export function toSafeSyncError(error: unknown): SafeSyncError {
   if (error instanceof ApiError) {
     return {
       kind:
@@ -338,7 +307,11 @@ function toSafeSyncError(error: unknown): SafeSyncError {
           : error instanceof NetworkError
             ? 'network'
             : 'api',
-      message: error.message,
+      message: error instanceof NetworkError ? 'Unable to reach WaniKani. Saved changes will retry.'
+        : error.status === 401 ? 'Sign in again to synchronize.'
+        : error.status === 403 ? 'WaniKani access needs attention. Check your API token and account.'
+        : error.status === 429 ? 'WaniKani requested a pause. Saved changes will retry.'
+        : 'WaniKani synchronization needs attention.',
       status: error.status,
       safeUrl: error.safeUrl,
       retryAt: error.retryAt?.toISOString() ?? null,

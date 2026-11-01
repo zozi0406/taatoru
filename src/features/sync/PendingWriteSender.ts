@@ -20,33 +20,20 @@
 import type { WaniKaniApi } from '@/api/WaniKaniApi';
 import { ApiError } from '@/api/errors';
 import type { Database } from '@/db/Database';
-import type { SelectedPendingWrites } from './types';
+import type { SelectedPendingWrites, PendingProgressOperation, PendingMaterialOperation } from './types';
+import { WriteReconciler } from './WriteReconciler';
+import { SyncRepository } from './SyncRepository';
 
-const REVIEW_CREATED_AT_DELAY_MS = 15 * 60 * 1_000;
+type PendingProgressRow = PendingProgressOperation;
 
-interface PendingProgressRow {
-  readonly subjectId: number;
-  readonly assignmentId: number;
-  readonly kind: 'lesson_start' | 'review';
-  readonly incorrectMeaningAnswers: number;
-  readonly incorrectReadingAnswers: number;
-  readonly createdAt: string;
-  readonly payloadJson: string;
-}
-
-interface PendingStudyMaterialRow {
-  readonly subjectId: number;
-  readonly studyMaterialId: number | null;
-  readonly meaningNote: string | null;
-  readonly readingNote: string | null;
-  readonly meaningSynonymsJson: string;
-  readonly createdAt: string;
-}
+type PendingStudyMaterialRow = PendingMaterialOperation;
 
 export class PendingWriteSender {
   constructor(
     private readonly db: Database,
     private readonly api: WaniKaniApi,
+    private readonly ownerFence = 0,
+    private readonly maxLevelGranted?: number,
   ) {}
 
   async sendSelectedPendingWrites(
@@ -54,6 +41,15 @@ export class PendingWriteSender {
     now: Date,
     signal?: AbortSignal,
   ): Promise<void> {
+    const history = await this.db.all<{ operation_key: string; revision: number; subject_id: number }>(
+      `SELECT operation_key, MAX(revision) AS revision, subject_id FROM sync_dispatches d
+       WHERE queue_kind = 'material' AND NOT EXISTS (SELECT 1 FROM pending_study_materials p WHERE p.subject_id = d.subject_id)
+       GROUP BY operation_key, subject_id ORDER BY subject_id LIMIT 4`);
+    for (const saved of history) {
+      const remote = await this.api.findStudyMaterial(saved.subject_id, signal);
+      await new SyncRepository(this.db).adoptAuthoritativeMaterial(saved.subject_id, saved.operation_key,
+        saved.revision, remote, now, true);
+    }
     const progressRows = await this.selectedProgress(selection.progressIds);
     for (const progress of progressRows) {
       await this.sendProgress(progress, now, signal);
@@ -63,7 +59,7 @@ export class PendingWriteSender {
       selection.studyMaterialIds,
     );
     for (const material of studyMaterialRows) {
-      await this.sendStudyMaterial(material, signal);
+      await this.sendStudyMaterial(material, now, signal);
     }
   }
 
@@ -72,91 +68,131 @@ export class PendingWriteSender {
     now: Date,
     signal?: AbortSignal,
   ): Promise<void> {
+    const repository = new SyncRepository(this.db);
+    const reconciler = new WriteReconciler(this.db, this.api, this.maxLevelGranted);
+    const resolution = await reconciler.reconcileProgress(progress, now, signal);
+    if (resolution.kind !== 'retry') {
+      await repository.settleProgress(progress, resolution, now);
+      return;
+    }
+    await this.db.transaction(async (tx) => {
+      const result = await tx.run(`UPDATE pending_progress SET delivery_state = 'in_flight', wire_created_at = ?
+        WHERE operation_key = ? AND revision = ?`, [resolution.wireCreatedAt, progress.operationKey, progress.revision]);
+      if (result.changes !== 1) throw new Error('Pending operation changed before dispatch');
+      await tx.run(`INSERT OR IGNORE INTO sync_dispatches
+        (operation_key, revision, queue_kind, subject_id, account_epoch, payload_json, source_json, wire_created_at, delivery_state, owner_fence)
+        VALUES (?, ?, 'progress', ?, ?, ?, ?, ?, 'in_flight', ?)`,
+      [progress.operationKey, progress.revision, progress.subjectId, progress.accountEpoch, progress.payloadJson,
+        progress.sourceJson, resolution.wireCreatedAt, this.ownerFence]);
+    });
     try {
+      let receipt;
       if (progress.kind === 'lesson_start') {
-        await this.api.startAssignment({
+        receipt = await this.api.startAssignment({
           assignmentId: progress.assignmentId,
-          startedAt: new Date(progress.createdAt),
+          startedAt: new Date(resolution.wireCreatedAt),
           ...(signal === undefined ? {} : { signal }),
         });
       } else {
-        const createdAt = new Date(progress.createdAt);
-        const includeCreatedAt =
-          now.getTime() - createdAt.getTime() > REVIEW_CREATED_AT_DELAY_MS;
-        await this.api.createReview({
+        receipt = await this.api.createReview({
           assignmentId: progress.assignmentId,
           incorrectMeaningAnswers: progress.incorrectMeaningAnswers,
           incorrectReadingAnswers: progress.incorrectReadingAnswers,
-          ...(includeCreatedAt ? { createdAt } : {}),
+          createdAt: new Date(resolution.wireCreatedAt),
           ...(signal === undefined ? {} : { signal }),
         });
       }
+      if (receipt?.assignment.id !== progress.assignmentId || receipt.assignment.data.subject_id !== progress.subjectId)
+        throw new Error('Invalid progress receipt');
+      await repository.settleProgress(progress, { kind: 'acknowledged', receipt, reason: 'server-receipt' }, now);
     } catch (error) {
       if (error instanceof ApiError && error.status === 422) {
-        await this.deleteProgress(progress);
+        const result = await reconciler.reconcileProgress({ ...progress, wireCreatedAt: resolution.wireCreatedAt }, now, signal);
+        await repository.settleProgress(progress, result.kind === 'retry'
+          ? { kind: 'attention', reason: 'validation-rejected' } : result, now);
         return;
       }
+      const state = error instanceof ApiError && [401, 403, 429].includes(error.status ?? 0) ? 'queued' : 'uncertain';
       await this.db.run(
         `UPDATE pending_progress
          SET attempt_count = attempt_count + 1,
-             last_error_at = ?
-         WHERE subject_id = ?
-           AND created_at = ?
-           AND payload_json = ?`,
-        [
-          now.toISOString(),
-          progress.subjectId,
-          progress.createdAt,
-          progress.payloadJson,
-        ],
+             last_error_at = ?, delivery_state = ?, last_error_kind = 'delivery-interrupted', next_attempt_at = ?
+         WHERE operation_key = ? AND revision = ?`,
+        [now.toISOString(), state, retryAt(progress.attemptCount, now, error), progress.operationKey, progress.revision],
       );
+      await this.db.run(`UPDATE sync_dispatches SET delivery_state = ? WHERE operation_key = ? AND revision = ?`,
+        [state, progress.operationKey, progress.revision]);
       throw error;
     }
-
-    await this.deleteProgress(progress);
   }
 
   private async sendStudyMaterial(
     material: PendingStudyMaterialRow,
+    now: Date,
     signal?: AbortSignal,
   ): Promise<void> {
-    await this.api.upsertStudyMaterial({
-      subjectId: material.subjectId,
-      ...(material.studyMaterialId === null
-        ? {}
-        : { studyMaterialId: material.studyMaterialId }),
-      meaningNote: material.meaningNote,
-      readingNote: material.readingNote,
-      meaningSynonyms: parseSynonyms(material.meaningSynonymsJson),
-      ...(signal === undefined ? {} : { signal }),
+    const reconciler = new WriteReconciler(this.db, this.api);
+    const resolution = await reconciler.reconcileMaterial(material, signal);
+    if (resolution.kind === 'authoritative') {
+      await new SyncRepository(this.db).adoptAuthoritativeMaterial(material.subjectId, material.operationKey,
+        material.revision, resolution.remote, now);
+      return;
+    }
+    if (resolution.kind === 'attention') {
+      await this.db.run(`UPDATE pending_study_materials SET delivery_state = 'rejected', last_error_kind = ?, conflict_json = ?
+        WHERE operation_key IS ? AND revision = ?`,
+      [resolution.reason, resolution.conflictJson ?? null, material.operationKey, material.revision]);
+      return;
+    }
+    const repository = new SyncRepository(this.db);
+    if (resolution.satisfied && resolution.remote !== null) {
+      await repository.settleMaterial(material, resolution.remote, now, resolution.matchedRevisions);
+      return;
+    }
+    const payloadJson = JSON.stringify({ ...resolution.fields, subjectId: material.subjectId,
+      ...(resolution.remote === null ? {} : { studyMaterialId: resolution.remote.id }) });
+    const prepared = await this.db.transaction(async (tx) => {
+      const dispatch = await tx.first<{ payload_json: string }>(
+        'SELECT payload_json FROM sync_dispatches WHERE operation_key = ? AND revision = ?', [material.operationKey, material.revision]);
+      const revision = material.revision + (dispatch !== null && dispatch.payload_json !== payloadJson ? 1 : 0);
+      const result = await tx.run(`UPDATE pending_study_materials SET revision = ?, study_material_id = ?, source_json = ?,
+        meaning_note = ?, reading_note = ?, meaning_synonyms_json = ?, delivery_state = 'in_flight', conflict_json = NULL
+        WHERE operation_key = ? AND revision = ?`,
+      [revision, resolution.remote?.id ?? null, JSON.stringify(resolution.remote), resolution.fields.meaningNote,
+        resolution.fields.readingNote, JSON.stringify(resolution.fields.meaningSynonyms), material.operationKey, material.revision]);
+      if (result.changes !== 1) return null;
+      for (const observed of resolution.matchedRevisions)
+        await tx.run('DELETE FROM sync_dispatches WHERE operation_key = ? AND revision = ?', [material.operationKey, observed]);
+      await tx.run(`INSERT OR IGNORE INTO sync_dispatches
+        (operation_key, revision, queue_kind, subject_id, account_epoch, payload_json, source_json, delivery_state, owner_fence)
+        VALUES (?, ?, 'material', ?, ?, ?, ?, 'in_flight', ?)`,
+      [material.operationKey, revision, material.subjectId, material.accountEpoch, payloadJson, JSON.stringify(resolution.remote), this.ownerFence]);
+      return { ...material, revision, payloadJson };
     });
-    await this.db.run(
-      `DELETE FROM pending_study_materials
-       WHERE subject_id = ?
-         AND study_material_id IS ?
-         AND meaning_note IS ?
-         AND reading_note IS ?
-         AND created_at = ?
-         AND meaning_synonyms_json = ?`,
-      [
-        material.subjectId,
-        material.studyMaterialId,
-        material.meaningNote,
-        material.readingNote,
-        material.createdAt,
-        material.meaningSynonymsJson,
-      ],
-    );
-  }
-
-  private deleteProgress(progress: PendingProgressRow): Promise<unknown> {
-    return this.db.run(
-      `DELETE FROM pending_progress
-       WHERE subject_id = ?
-         AND created_at = ?
-         AND payload_json = ?`,
-      [progress.subjectId, progress.createdAt, progress.payloadJson],
-    );
+    if (prepared === null) return;
+    try {
+      const receipt = await this.api.upsertStudyMaterial({ ...resolution.fields, subjectId: material.subjectId,
+        ...(resolution.remote === null ? {} : { studyMaterialId: resolution.remote.id }),
+        ...(signal === undefined ? {} : { signal }) });
+      await repository.settleMaterial(prepared, receipt, now);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 422) {
+        const observed = await this.api.findStudyMaterial(material.subjectId, signal);
+        if (observed !== null && JSON.stringify({ meaningNote: observed.data.meaning_note, readingNote: observed.data.reading_note,
+          meaningSynonyms: observed.data.meaning_synonyms }) === JSON.stringify(resolution.fields)) {
+          await repository.settleMaterial(prepared, observed, now);
+          return;
+        }
+      }
+      const rejected = error instanceof ApiError && error.status === 422;
+      const state = rejected ? 'rejected' : error instanceof ApiError && [401, 403, 404, 429].includes(error.status ?? 0) ? 'queued' : 'uncertain';
+      await this.db.run(`UPDATE pending_study_materials SET delivery_state = ?, attempt_count = attempt_count + 1,
+        last_error_kind = ?, next_attempt_at = ? WHERE operation_key = ? AND revision = ?`,
+      [state, rejected ? 'validation-rejected' : 'delivery-interrupted', rejected ? null : retryAt(material.attemptCount, now, error), material.operationKey, prepared.revision]);
+      await this.db.run('UPDATE sync_dispatches SET delivery_state = ? WHERE operation_key = ? AND revision = ?',
+        [state, material.operationKey, prepared.revision]);
+      if (!rejected) throw error;
+    }
   }
 
   private selectedProgress(
@@ -173,9 +209,12 @@ export class PendingWriteSender {
               incorrect_meaning_answers AS incorrectMeaningAnswers,
               incorrect_reading_answers AS incorrectReadingAnswers,
               created_at AS createdAt,
-              payload_json AS payloadJson
+              payload_json AS payloadJson, operation_key AS operationKey, revision,
+              account_epoch AS accountEpoch, delivery_state AS deliveryState,
+              source_json AS sourceJson, wire_created_at AS wireCreatedAt, attempt_count AS attemptCount
        FROM pending_progress
        WHERE subject_id IN (${placeholders(subjectIds.length)})
+         AND delivery_state != 'rejected'
        ORDER BY created_at, subject_id`,
       subjectIds,
     );
@@ -194,9 +233,12 @@ export class PendingWriteSender {
               meaning_note AS meaningNote,
               reading_note AS readingNote,
               meaning_synonyms_json AS meaningSynonymsJson,
-              created_at AS createdAt
+              created_at AS createdAt, operation_key AS operationKey, revision, account_epoch AS accountEpoch,
+              source_json AS sourceJson, delivery_state AS deliveryState, wire_created_at AS wireCreatedAt,
+              attempt_count AS attemptCount, '{}' AS payloadJson
        FROM pending_study_materials
        WHERE subject_id IN (${placeholders(subjectIds.length)})
+         AND delivery_state != 'rejected'
        ORDER BY created_at, subject_id`,
       subjectIds,
     );
@@ -207,13 +249,7 @@ function placeholders(count: number): string {
   return Array.from({ length: count }, () => '?').join(', ');
 }
 
-function parseSynonyms(value: string): readonly string[] {
-  const decoded: unknown = JSON.parse(value);
-  if (
-    !Array.isArray(decoded) ||
-    !decoded.every((synonym) => typeof synonym === 'string')
-  ) {
-    throw new Error('Invalid pending study-material synonyms');
-  }
-  return decoded;
+function retryAt(attempt: number, now: Date, error: unknown): string {
+  const delay = Math.min(60_000, 2_000 * 2 ** Math.min(attempt, 5)) * (1 + Math.random() * .2);
+  return new Date(Math.max(now.getTime() + delay, error instanceof ApiError ? error.retryAt?.getTime() ?? 0 : 0)).toISOString();
 }

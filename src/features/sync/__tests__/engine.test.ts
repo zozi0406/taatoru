@@ -43,12 +43,10 @@ test('checks the user grant before incrementally fetching subjects', async () =>
     updatedResources: 7,
   });
   expect(events).toEqual([
-    'pending-progress:start',
-    'pending-study:start',
     'user:start',
-    'pending-progress:end',
-    'pending-study:end',
     'user:end',
+    'pending-progress:start',
+    'pending-progress:end',
     'subjects:start',
     'subjects:end',
     'assignments:start',

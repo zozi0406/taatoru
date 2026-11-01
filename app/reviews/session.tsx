@@ -14,6 +14,7 @@ import {
   addStudySynonym,
   loadStudyMaterials,
 } from '@/features/sessions/studyMaterials';
+import { useStudyMaterialRefresh } from '@/features/sessions/useStudyMaterialRefresh';
 import type { SubjectStudyMaterial } from '@/features/subjects/subjectDetails';
 import {
   loadStudySettings,
@@ -25,7 +26,7 @@ import { useTheme } from '@/ui/theme/ThemeProvider';
 
 export default function ReviewSessionRoute() {
   const router = useRouter();
-  const { db } = useAppServices();
+  const { db, notifyPendingWrites, subscribeToData } = useAppServices();
   const theme = useTheme();
   const repository = useMemo(() => new ReviewSessionRepository(db), [db]);
   const [snapshot, setSnapshot] = useState<ReviewSessionSnapshot | null>(null);
@@ -39,6 +40,7 @@ export default function ReviewSessionRoute() {
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  useStudyMaterialRefresh(db, subjects, setMaterials, subscribeToData);
   useEffect(() => {
     let active = true;
     void (async () => {
@@ -144,6 +146,7 @@ export default function ReviewSessionRoute() {
         }}
         onAddSynonym={async (subjectId, synonym) => {
           await addStudySynonym(db, subjectId, synonym);
+          notifyPendingWrites();
           setMaterials(
             await loadStudyMaterials(
               db,
@@ -156,6 +159,7 @@ export default function ReviewSessionRoute() {
             transition.completedItem,
             transition.snapshot,
           );
+          notifyPendingWrites();
         }}
         onExit={() => router.replace('/')}
         onFinish={async () => {

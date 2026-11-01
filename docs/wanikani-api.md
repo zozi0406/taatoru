@@ -1,11 +1,11 @@
 # WaniKani API integration
 
-Last validated: 5 August 2026
+API contract last validated: 5 August 2026. Implementation revalidated: 1 November 2026.
 
 Taatoru uses the [WaniKani API v2 revision
 20170710](https://docs.api.wanikani.com/20170710/). This document summarizes the
-parts of that reference that govern Taatoru, records the current validation
-result, and provides a checklist for future audits.
+parts of that reference that govern Taatoru, records the dated validation
+results, and provides a checklist for future audits.
 
 This is an implementation guide, not a substitute for the official reference.
 Recheck the official site before changing the API client because non-breaking
@@ -92,28 +92,27 @@ The live check made no assignment, review, or study-material writes and
 recorded no account content or credential. The passing checks do not turn the
 other documented gaps into compliant behavior.
 
-## Required follow-up
+## August follow-up status (updated 25 October)
 
-Address these items before treating the integration as fully aligned:
+The table and validation evidence above describe the August implementation. The October sync-correctness work supersedes its hidden-transition, pagination and global-pacing gaps:
 
-1. Fetch hidden transitions during incremental synchronization, then keep
-   hidden rows cached only if needed while excluding them from user-facing
-   queries.
-2. Add conditional reads for stable endpoints, beginning with `user` and
-   `level_progressions`, and handle `304` without attempting to decode JSON.
-3. Replace the unconditional quick-sync download of level progressions with
-   `updated_after` or a conditional request.
-4. Re-evaluate speculative parallel pagination after server-derived rate-limit
-   budgeting is available so a full refresh cannot create an avoidable burst.
+- Incremental reads include hidden/locked transitions and user-facing queries exclude unavailable subjects. Reset preflight and targeted assignment checks protect pending progress.
+- Collections follow actual continuation URLs, retain the first watermark, replay a one-second overlap and reject older resource versions. Speculative pagination is no longer used in production collection reads.
+- Every production HTTP request uses the persisted scheduler, including pagination, credential validation and reconciliation. It spaces requests by at least 1,100 ms, honors quota/reset delays and applies deadlines/backoff.
+- Typed write receipts, immutable dispatch evidence and fenced settlement handle lost responses, 422s and newer local revisions. No deprecated review-history endpoint is used.
+
+The complete verification gate passed: 69 Jest suites / 393 tests plus 13 release-configuration tests, lint and TypeScript. Android fixture checks exercised real Expo SQLite and isolated study screens. See [the release evidence and limits](verification/sync-correctness.md) and [reference matrix](verification/sync-reference-matrix.md). No real account was mutated by these checks.
+
+Conditional reads with ETag/Last-Modified and reducing the unconditional level-progression download remain efficiency follow-ups. Remote preflight is not atomic with later server changes; WaniKani supplies no documented material compare-and-set or review idempotency key. Those limits remain explicit.
 
 ## Existing implementation map
 
 - API transport, headers, writes, decoding, and collection filters:
   `src/api/HttpWaniKaniApi.ts`
-- Sequential and speculative pagination: `src/api/pagination.ts`
-- Local rate-limit estimate: `src/api/rateLimit.ts`
+- Continuation pagination: `src/api/pagination.ts`
+- Persisted request pacing and deadlines: `src/api/RequestScheduler.ts`; header decoding: `src/api/rateLimit.ts`
 - Quick and full synchronization orchestration:
-  `src/features/sync/SyncEngine.ts`
+  `src/features/sync/{SyncCoordinator,OwnedSyncEngine,SyncPreflight,SyncEngine}.ts`
 - Synchronization cursors and transactional full replacement:
   `src/features/sync/SyncRepository.ts` and the repositories under
   `src/db/repositories/`

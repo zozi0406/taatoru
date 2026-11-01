@@ -39,28 +39,37 @@ export class NotificationService {
       : this.platform.requestPermission(preferences);
   }
 
-  async rebuild(input: ReviewNotificationInput): Promise<void> {
+  async rebuild(input: ReviewNotificationInput, assertCurrent: () => Promise<void> = async () => {}): Promise<void> {
+    await assertCurrent();
     await this.platform.createChannel();
+    await assertCurrent();
     if (input.vacationActive) {
       await this.platform.cancelAll();
+      await assertCurrent();
       await this.platform.setBadge(0);
       return;
     }
     if (!input.alerts && !input.badges) {
       await this.platform.cancelAll();
+      await assertCurrent();
       await this.platform.setBadge(0);
       return;
     }
     if (!(await this.platform.getPermission())) {
+      await assertCurrent();
       await this.platform.cancelAll();
+      await assertCurrent();
       await this.platform.setBadge(0);
       return;
     }
+    await assertCurrent();
     await this.platform.cancelAll();
+    await assertCurrent();
     await this.platform.setBadge(
       input.badges ? input.currentReviewCount : 0,
     );
     for (const notification of buildReviewNotificationSchedule(input)) {
+      await assertCurrent();
       await this.platform.schedule(notification);
     }
   }

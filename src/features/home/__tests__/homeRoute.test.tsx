@@ -5,6 +5,7 @@ import HomeRoute from '../../../../app/(tabs)/index';
 const mockRouter = {
   push: jest.fn(),
 };
+jest.mock('@/features/auth/AuthProvider', () => ({ useAuth: () => ({ logout: jest.fn() }) }));
 
 jest.mock('expo-router', () => ({
   useRouter: () => mockRouter,

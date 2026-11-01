@@ -1,5 +1,7 @@
+import { isOlderResource } from './resourceVersion';
 import type { IdentifiedResource, StudyMaterialData } from '@/api/types';
 import type { Database } from '../Database';
+import { applyPendingState } from '@/features/sync/PendingStateRepository';
 
 export class StudyMaterialRepository {
   constructor(private readonly db: Database) {}
@@ -13,6 +15,7 @@ export class StudyMaterialRepository {
   ): Promise<void> {
     return this.db.transaction(async (tx) => {
       for (const resource of resources) {
+        if (await isOlderResource(tx, 'study_materials', resource.data.subject_id, resource.data_updated_at)) continue;
         const data = resource.data;
         await tx.run(
           `INSERT INTO study_materials (
@@ -46,6 +49,7 @@ export class StudyMaterialRepository {
           [data.meaning_synonyms.join(' '), data.subject_id],
         );
       }
+      await applyPendingState(tx);
       await tx.run(
         'UPDATE sync_state SET study_materials_updated_at = ? WHERE id = 1',
         [cursor],

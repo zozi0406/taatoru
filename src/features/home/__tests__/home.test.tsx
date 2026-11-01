@@ -79,6 +79,14 @@ test('runs quick and full synchronization controls then reloads', async () => {
   expect(loadSnapshot).toHaveBeenCalledTimes(3);
 });
 
+test('a library refresh with 48 pending writes is not labeled synchronization complete', async () => {
+  await renderHome({ synchronize: async () => ({ status: 'completed', updatedResources: 3,
+    delivery: 'pending', queue: { pending: 48, uncertain: 1, rejected: 0, nextAttemptAt: null } }) });
+  await act(async () => { fireEvent.press(screen.getByRole('button', { name: 'Quick sync' })); });
+  expect(screen.queryByText('Synchronization complete')).toBeNull();
+  expect(screen.getByText(/48 changes still waiting/)).toBeVisible();
+});
+
 test.each([
   [
     { status: 'skipped', reason: 'offline' } as const,

@@ -12,6 +12,7 @@ import { ResourceRepository } from '@/db/repositories/ResourceRepository';
 import type { SyncResult } from '@/features/sync/SyncEngine';
 import { SyncRepository } from '@/features/sync/SyncRepository';
 import { createSyncStore } from '@/features/sync/syncStore';
+import { SyncControlRepository } from '@/features/sync/SyncControlRepository';
 import { userFixture } from '@/fixtures/api';
 import { renderApp } from '@/test/render';
 import { ThemeProvider } from '@/ui/theme/ThemeProvider';
@@ -50,15 +51,15 @@ test('validates, persists, and starts the first quick sync', async () => {
     await expect(harness.manager.login('  wk-token  ')).resolves.toEqual(
       userFixture,
     );
-    expect(harness.apiFactory).toHaveBeenCalledWith('wk-token');
+    expect(harness.apiFactory).toHaveBeenCalledWith('wk-token', expect.objectContaining({ credentialKey: 'taatoru.credential.1' }));
     expect(harness.api.getUser).toHaveBeenCalledTimes(1);
-    expect(harness.tokenStore.setPending).toHaveBeenCalledWith('wk-token');
-    expect(harness.tokenStore.set).toHaveBeenCalledWith('wk-token');
+    expect(harness.tokenStore.setCredential).toHaveBeenCalledWith('taatoru.credential.1', 'wk-token');
+    expect(await new SyncControlRepository(harness.db).getCredentialKey()).toBe('taatoru.credential.1');
     expect(harness.tokenStore.removePending).toHaveBeenCalledTimes(1);
     expect(
-      harness.tokenStore.setPending.mock.invocationCallOrder[0],
+      harness.tokenStore.setCredential.mock.invocationCallOrder[0],
     ).toBeLessThan(harness.synchronize.mock.invocationCallOrder[0]!);
-    expect(harness.tokenStore.set.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(harness.tokenStore.setCredential.mock.invocationCallOrder[0]).toBeLessThan(
       harness.tokenStore.removePending.mock.invocationCallOrder[0]!,
     );
     expect(harness.synchronize).toHaveBeenCalledWith('quick');
@@ -84,7 +85,7 @@ test('does not authenticate or persist a token when the required initial sync fa
     await expect(harness.manager.login('new-token')).rejects.toThrow(
       'initial WaniKani sync',
     );
-    expect(harness.tokenStore.setPending).toHaveBeenCalledWith('new-token');
+    expect(await harness.tokenStore.getPending()).toBe('new-token');
     expect(harness.tokenStore.set).not.toHaveBeenCalled();
     expect(harness.tokenStore.removePending).not.toHaveBeenCalled();
     await expect(
@@ -158,11 +159,13 @@ test('resumes from the cached user while startup synchronization is offline', as
       reason: 'offline',
     });
 
+    const control = new SyncControlRepository(harness.db);
+    await control.activateCredentials(await control.beginCredentialTransition(), userFixture.data.id, false);
     await expect(harness.manager.resume('stored-token')).resolves.toEqual(
       userFixture,
     );
     expect(harness.api.getUser).not.toHaveBeenCalled();
-    expect(harness.apiFactory).toHaveBeenCalledWith('stored-token');
+    expect(harness.synchronize).toHaveBeenCalledWith('quick');
   } finally {
     await harness.db.close();
   }
@@ -216,10 +219,12 @@ test('a different account requires explicit replacement before pending data is c
     expect(harness.tokenStore.set).not.toHaveBeenCalled();
     await expect(pendingCount(harness.db)).resolves.toBe(1);
 
-    await harness.manager.changeAccount('other-token');
-    expect(harness.clearAccount).toHaveBeenCalledTimes(1);
+    await expect(harness.manager.changeAccount('other-token')).rejects.toThrow('Changes are still waiting');
+    await expect(pendingCount(harness.db)).resolves.toBe(1);
+    await harness.manager.changeAccount('other-token', undefined, true);
     await expect(pendingCount(harness.db)).resolves.toBe(0);
-    expect(harness.tokenStore.set).toHaveBeenCalledWith('other-token');
+    expect((await new SyncControlRepository(harness.db).getAccountContext())?.userId).toBe('another-user-id');
+    expect(harness.tokenStore.setCredential).toHaveBeenLastCalledWith('taatoru.credential.3', 'other-token');
     expect(harness.synchronize).toHaveBeenCalledWith('quick');
   } finally {
     await harness.db.close();
@@ -248,7 +253,7 @@ test('exposes interrupted setup without making a request on launch', async () =>
   }
 });
 
-test('restarts interrupted setup after clearing the incomplete cache', async () => {
+test('resumes interrupted setup without clearing the incomplete cache', async () => {
   const harness = await authHarness();
   harness.tokenStore.getPending.mockResolvedValue('pending-token');
   await new ResourceRepository(harness.db).replaceUser(userFixture);
@@ -276,9 +281,7 @@ test('restarts interrupted setup after clearing the incomplete cache', async () 
       userFixture,
     );
 
-    expect(harness.clearAccount.mock.invocationCallOrder[0]).toBeLessThan(
-      harness.api.getUser.mock.invocationCallOrder[0]!,
-    );
+    expect(harness.clearAccount).not.toHaveBeenCalled();
     await expect(
       harness.db.first('SELECT value FROM settings WHERE key = ?', ['theme']),
     ).resolves.toEqual({ value: 'dark' });
@@ -287,7 +290,7 @@ test('restarts interrupted setup after clearing the incomplete cache', async () 
   }
 });
 
-test('using another API key clears partial data and the pending credential', async () => {
+test('using another API key preserves partial data and removes only the pending credential', async () => {
   const harness = await authHarness();
   await new ResourceRepository(harness.db).replaceUser(userFixture);
   await harness.db.run(
@@ -297,12 +300,11 @@ test('using another API key clears partial data and the pending credential', asy
     await harness.manager.useAnotherApiKey();
 
     expect(harness.apiFactory).not.toHaveBeenCalled();
-    expect(harness.clearAccount.mock.invocationCallOrder[0]).toBeLessThan(
-      harness.tokenStore.removePending.mock.invocationCallOrder[0]!,
-    );
+    expect(harness.clearAccount).not.toHaveBeenCalled();
+    expect(harness.tokenStore.removePending).toHaveBeenCalled();
     await expect(
       harness.db.first('SELECT id FROM user LIMIT 1'),
-    ).resolves.toBeNull();
+    ).resolves.toEqual({ id: userFixture.data.id });
     await expect(
       harness.db.first('SELECT value FROM settings WHERE key = ?', ['theme']),
     ).resolves.toEqual({ value: 'dark' });
@@ -657,13 +659,23 @@ async function renderLoginScreen() {
 async function authHarness(user = userFixture) {
   const db = await NodeTestDatabase.open();
   await migrateDatabase(db);
+  const credentials = new Map<string, string>();
   const tokenStore = {
     get: jest.fn<Promise<string | null>, []>(async () => null),
     set: jest.fn(async (_token: string) => undefined),
     remove: jest.fn(async () => undefined),
-    getPending: jest.fn<Promise<string | null>, []>(async () => null),
+    getPending: jest.fn<Promise<string | null>, []>(async () => {
+      const row = await db.first<{ active_credential_key: string | null; last_sync_at: string | null }>(
+        'SELECT c.active_credential_key, s.last_sync_at FROM sync_control c CROSS JOIN sync_state s',
+      );
+      return row?.last_sync_at === null && row.active_credential_key !== null
+        ? credentials.get(row.active_credential_key) ?? null : null;
+    }),
     setPending: jest.fn(async (_token: string) => undefined),
     removePending: jest.fn(async () => undefined),
+    getCredential: jest.fn<Promise<string | null>, [string]>(async (key) => credentials.get(key) ?? null),
+    setCredential: jest.fn(async (key: string, token: string) => { credentials.set(key, token); }),
+    removeCredential: jest.fn(async (key: string) => { credentials.delete(key); }),
   } satisfies jest.Mocked<TokenStore>;
   const api = {
     getUser: jest.fn(async () => user),

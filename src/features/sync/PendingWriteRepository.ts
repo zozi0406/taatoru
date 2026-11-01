@@ -18,6 +18,8 @@
 
 import type { Database, DatabaseTransaction } from '@/db/Database';
 import { projectSrsStage } from './projection';
+import { SyncControlRepository } from './SyncControlRepository';
+import { applyPendingState } from './PendingStateRepository';
 import type { ProgressOperationKind } from './types';
 
 export interface LessonCompletion {
@@ -37,10 +39,12 @@ export interface QueuedStudyMaterial {
   readonly readingNote: string | null;
   readonly meaningSynonyms: readonly string[];
   readonly queuedAt: Date;
+  readonly baselineJson?: string;
 }
 
 interface ProgressRow {
   readonly srsStage: number;
+  readonly level: number;
 }
 
 interface PendingProgressRow {
@@ -52,6 +56,7 @@ interface StudyMaterialTargetRow {
   readonly subjectType: string;
   readonly localStudyMaterialId: number | null;
   readonly studyMaterialId: number | null;
+  readonly resourceJson: string | null;
 }
 
 export class PendingWriteRepository {
@@ -100,7 +105,8 @@ export class PendingWriteRepository {
       const target = await tx.first<StudyMaterialTargetRow>(
         `SELECT s.object AS subjectType,
                 sm.id AS localStudyMaterialId,
-                CASE WHEN sm.id > 0 THEN sm.id ELSE NULL END AS studyMaterialId
+                CASE WHEN sm.id > 0 THEN sm.id ELSE NULL END AS studyMaterialId,
+                CASE WHEN sm.id > 0 THEN sm.resource_json ELSE NULL END AS resourceJson
          FROM subjects s
          LEFT JOIN study_materials sm ON sm.subject_id = s.id
          WHERE s.id = ?`,
@@ -112,6 +118,10 @@ export class PendingWriteRepository {
 
       const synonymsJson = JSON.stringify(material.meaningSynonyms);
       const queuedAt = material.queuedAt.toISOString();
+      const epoch = (await tx.first<{ account_epoch: number }>(
+        'SELECT account_epoch FROM sync_control WHERE id = 1',
+      ))!.account_epoch;
+      const operationKey = await new SyncControlRepository(this.db).allocateOperationKey(tx, epoch);
       if (target.localStudyMaterialId === null) {
         await tx.run(
           `INSERT INTO study_materials (
@@ -148,14 +158,17 @@ export class PendingWriteRepository {
       await tx.run(
         `INSERT INTO pending_study_materials (
           subject_id, study_material_id, meaning_note, reading_note,
-          meaning_synonyms_json, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?)
+          meaning_synonyms_json, created_at, operation_key, account_epoch, source_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(subject_id) DO UPDATE SET
           study_material_id = excluded.study_material_id,
           meaning_note = excluded.meaning_note,
           reading_note = excluded.reading_note,
           meaning_synonyms_json = excluded.meaning_synonyms_json,
-          created_at = excluded.created_at`,
+          created_at = excluded.created_at,
+          revision = pending_study_materials.revision + 1,
+          delivery_state = 'queued', next_attempt_at = NULL,
+          wire_created_at = NULL, last_error_kind = NULL, attempt_count = 0`,
         [
           material.subjectId,
           target.studyMaterialId,
@@ -163,6 +176,9 @@ export class PendingWriteRepository {
           material.readingNote,
           synonymsJson,
           queuedAt,
+          operationKey,
+          epoch,
+          material.baselineJson ?? target.resourceJson ?? 'null',
         ],
       );
       await tx.run(
@@ -193,6 +209,7 @@ export class PendingWriteRepository {
       ) {
         return;
       }
+      if (existing !== null) throw new Error('Previous progress must be synchronized or resolved first');
       const progress = await currentProgress(tx, completion);
       const projection = projectSrsStage({
         kind,
@@ -202,6 +219,24 @@ export class PendingWriteRepository {
         now: completion.completedAt,
       });
       const completedAt = completion.completedAt.toISOString();
+      const control = (await tx.first<{ account_epoch: number; last_confirmed_reset_at: string | null }>(
+        'SELECT account_epoch, last_confirmed_reset_at FROM sync_control WHERE id = 1',
+      ))!;
+      const assignment = await tx.first<{ resource_json: string }>(
+        'SELECT resource_json FROM assignments WHERE id = ? AND subject_id = ?',
+        [completion.assignmentId, completion.subjectId],
+      );
+      const statistic = await tx.first<{ resource_json: string }>(
+        'SELECT resource_json FROM review_statistics WHERE subject_id = ?', [completion.subjectId],
+      );
+      const sourceJson = JSON.stringify({
+        assignment: JSON.parse(assignment!.resource_json),
+        statistic: statistic === null ? null : JSON.parse(statistic.resource_json),
+        resetAt: control.last_confirmed_reset_at,
+        level: progress.level,
+      });
+      const operationKey = await new SyncControlRepository(this.db)
+        .allocateOperationKey(tx, control.account_epoch);
       const payloadJson = JSON.stringify({
         assignmentId: completion.assignmentId,
         subjectId: completion.subjectId,
@@ -215,8 +250,8 @@ export class PendingWriteRepository {
         `INSERT INTO pending_progress (
           subject_id, assignment_id, operation_kind,
           incorrect_meaning_answers, incorrect_reading_answers,
-          created_at, payload_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+          created_at, payload_json, operation_key, account_epoch, source_json, projection_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(subject_id) DO UPDATE SET
           assignment_id = excluded.assignment_id,
           operation_kind = excluded.operation_kind,
@@ -225,7 +260,11 @@ export class PendingWriteRepository {
           created_at = excluded.created_at,
           payload_json = excluded.payload_json,
           attempt_count = 0,
-          last_error_at = NULL`,
+          last_error_at = NULL, operation_key = excluded.operation_key,
+          account_epoch = excluded.account_epoch, source_json = excluded.source_json,
+          projection_json = excluded.projection_json, revision = pending_progress.revision + 1,
+          delivery_state = 'queued', next_attempt_at = NULL, wire_created_at = NULL,
+          last_error_kind = NULL`,
         [
           completion.subjectId,
           completion.assignmentId,
@@ -234,15 +273,15 @@ export class PendingWriteRepository {
           incorrectReadingAnswers,
           completedAt,
           payloadJson,
+          operationKey,
+          control.account_epoch,
+          sourceJson,
+          JSON.stringify(projection),
         ],
       );
       await tx.run(
-        'DELETE FROM assignments WHERE id = ? AND subject_id = ?',
-        [completion.assignmentId, completion.subjectId],
-      );
-      await tx.run(
         `UPDATE subject_progress
-         SET srs_stage = ?, last_mistake_at = ?
+         SET srs_stage = ?, last_mistake_at = COALESCE(?, last_mistake_at)
          WHERE subject_id = ?`,
         [
           projection.srsStage,
@@ -260,6 +299,7 @@ export class PendingWriteRepository {
           [completion.subjectId, projection.lastMistakeAt],
         );
       }
+      await applyPendingState(tx);
     })();
   }
 }
@@ -269,7 +309,7 @@ async function currentProgress(
   completion: LessonCompletion,
 ): Promise<ProgressRow> {
   const row = await tx.first<ProgressRow>(
-    `SELECT sp.srs_stage AS srsStage
+    `SELECT sp.srs_stage AS srsStage, sp.level
      FROM subject_progress sp
      JOIN assignments a
        ON a.subject_id = sp.subject_id

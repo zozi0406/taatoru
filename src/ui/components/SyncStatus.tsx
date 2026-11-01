@@ -4,14 +4,15 @@ import { minimumTouchTarget } from '../theme/spacing';
 import { useTheme } from '../theme/ThemeProvider';
 
 export type SyncStatusState =
-  'idle' | 'syncing' | 'completed' | 'attention' | 'failed' | 'offline';
+  'idle' | 'syncing' | 'completed' | 'pending' | 'attention' | 'failed' | 'offline';
 
 const LABELS: Readonly<Record<SyncStatusState, string>> = {
   idle: 'Ready to synchronize',
   syncing: 'Synchronizing',
   completed: 'Synchronization complete',
+  pending: 'Changes waiting to upload',
   failed: 'Synchronization failed',
-  attention: 'Account needs attention',
+  attention: 'Synchronization needs attention',
   offline: 'Offline',
 };
 
