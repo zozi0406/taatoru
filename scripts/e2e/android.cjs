@@ -5,8 +5,9 @@ const { spawn, spawnSync, execFileSync } = require('node:child_process');
 const { stringify } = require('yaml');
 const { captureFile } = require('../../e2e/runner/capture.ts');
 const { startMetroBridge } = require('../../e2e/runner/metro.ts');
+const { cleanupRunnerResources } = require('../../e2e/runner/cleanup.ts');
 const { startMockServer } = require('../../e2e/mock/server.ts');
-const { parseRunnerArgs, selectDevice, waitFor, tap, reviewCommands, lessonCommands, answerCommands, assertReviewJournal, cancelLessonCommands, assertRetryTimestamps } = require('../../e2e/runner/flows.ts');
+const { parseRunnerArgs, selectDevice, waitFor, tap, reviewCommands, lessonCommands, answerCommands, assertReviewJournal, cancelLessonCommands, assertRetryTimestamps, developmentClientLaunchCommand } = require('../../e2e/runner/flows.ts');
 const ROOT = path.resolve(__dirname, '../..');
 const APP = 'app.taatoru.e2e';
 const SDK = process.env.ANDROID_HOME || path.join(process.env.HOME, 'Library/Android/sdk');
@@ -52,7 +53,7 @@ function snapshot(name) {
   fs.writeFileSync(path.join(directory, 'rows.json'), JSON.stringify(state, null, 2)); db.close(); return state;
 }
 function launch() {
-  adb(['shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', 'taatoru-e2e://expo-development-client/?url=http%3A%2F%2F127.0.0.1%3A8091', APP]);
+  adb(['shell', developmentClientLaunchCommand()]);
 }
 const options = parseRunnerArgs(process.argv.slice(2));
 (async () => {
@@ -87,7 +88,7 @@ const options = parseRunnerArgs(process.argv.slice(2));
   adb(['install', '-r', apk], { timeout: 120000 });
   adb(['shell', 'am', 'force-stop', APP]); adb(['shell', 'pm', 'clear', APP]);
   launch();
-  await flow('ready', [{ tapOn: { text: 'Continue', optional: true } }, { runFlow: { when: { visible: 'Reload' }, commands: [{ back: {} }] } }, waitFor('home-dashboard')]);
+  await flow('ready', [waitFor('home-dashboard')]);
   const scenario = server.world.scenario;
   if (options.suite === 'sandbox') {
     console.log(`Synthetic sandbox ready (${options.scenario}, seed ${options.seed}). Press Ctrl-C to stop owned services.`);
@@ -231,8 +232,15 @@ const options = parseRunnerArgs(process.argv.slice(2));
     try { snapshot('failure'); } catch {}
   }
 }).finally(async () => {
-  if (server) { fs.writeFileSync(path.join(output, 'server.json'), JSON.stringify({ scenario: server.world.scenario, journal: server.journal }, null, 2)); await server.close(); }
-  if (metro && metro.exitCode === null) await new Promise(resolve => { metro.once('exit', resolve); metro.kill('SIGTERM'); setTimeout(resolve, 5000).unref(); });
-  await bridge?.close();
-  for (const port of mappings) { try { adb(['reverse', '--remove', `tcp:${port}`]); } catch {} }
+  await cleanupRunnerResources([
+    ...mappings.map(port => () => { adb(['reverse', '--remove', `tcp:${port}`]); }),
+    async () => {
+      if (metro && metro.exitCode === null) await new Promise(resolve => {
+        metro.once('exit', resolve); metro.kill('SIGTERM'); setTimeout(resolve, 5000).unref();
+      });
+    },
+    async () => { await bridge?.close(); },
+    () => { if (server) fs.writeFileSync(path.join(output, 'server.json'), JSON.stringify({ scenario: server.world.scenario, journal: server.journal }, null, 2)); },
+    async () => { await server?.close(); },
+  ]).catch(error => { console.error('E2E cleanup failed:', error); process.exitCode = 1; });
 });

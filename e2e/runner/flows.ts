@@ -4,6 +4,22 @@ import { PRESETS } from '../scenarios/factory';
 export type Command = Record<string, unknown>;
 export const SUITES = ['smoke', 'mutations', 'progression', 'bounds', 'recovery', 'resume', 'materials', 'preacceptance', 'quota', 'rejected', 'sandbox', 'receipt-recovery', 'level-up-auto', 'connection-before', 'material-recovery'] as const;
 export type Suite = typeof SUITES[number];
+
+/** Expo launcher flags affect development chrome only; application routes stay real. */
+export function developmentClientLaunchUrl(): string {
+  const launch = new URL('taatoru-e2e://expo-development-client/');
+  launch.searchParams.set('url', 'http://127.0.0.1:8091');
+  launch.searchParams.set('disableOnboarding', '1');
+  launch.searchParams.set('disableFab', '1');
+  launch.searchParams.set('disableAutoLaunch', '1');
+  return launch.toString();
+}
+
+/** adb shell joins arguments; quote the fixed URL so query separators stay literal. */
+export function developmentClientLaunchCommand(): string {
+  return `am start -a android.intent.action.VIEW -d '${developmentClientLaunchUrl()}' app.taatoru.e2e`;
+}
+
 export function parseRunnerArgs(args: readonly string[]) {
   const options: Record<string, string> = {};
   for (let index = 0; index < args.length; index += 2) {

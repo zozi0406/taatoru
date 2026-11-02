@@ -1,6 +1,26 @@
 /** @jest-environment node */
-import { parseRunnerArgs, selectDevice, reviewCommands } from '../runner/flows';
+import { execFileSync } from 'node:child_process';
+import { parseRunnerArgs, selectDevice, reviewCommands, developmentClientLaunchUrl, developmentClientLaunchCommand } from '../runner/flows';
 import { createScenario } from '../scenarios/factory';
+
+test('isolated development launch suppresses developer onboarding without changing app routes', () => {
+  const launch = new URL(developmentClientLaunchUrl());
+  expect(launch.protocol).toBe('taatoru-e2e:');
+  expect(launch.hostname).toBe('expo-development-client');
+  expect(launch.searchParams.get('url')).toBe('http://127.0.0.1:8091');
+  expect(launch.searchParams.get('disableOnboarding')).toBe('1');
+  expect(launch.searchParams.get('disableFab')).toBe('1');
+  expect(launch.searchParams.get('disableAutoLaunch')).toBe('1');
+});
+
+test('Android shell receives the complete development URL as one argument', () => {
+  const output = execFileSync('/bin/sh', ['-c',
+    `am() { printf '%s\\n' "$@"; }\n${developmentClientLaunchCommand()}`,
+  ], { encoding: 'utf8' });
+  expect(output.trim().split('\n')).toEqual([
+    'start', '-a', 'android.intent.action.VIEW', '-d', developmentClientLaunchUrl(), 'app.taatoru.e2e',
+  ]);
+});
 
 test('rejects unknown suite and ambiguous devices before issuing resets', () => {
   expect(() => parseRunnerArgs(['--suite', 'unknown'])).toThrow();
