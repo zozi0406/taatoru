@@ -16,6 +16,7 @@ import {
 } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { getE2ERuntime, E2E_ORIGIN } from '@/test/e2e/runtime';
 import { HttpWaniKaniApi } from '@/api/HttpWaniKaniApi';
 import type { Database } from '@/db/Database';
 import { ExpoDatabase } from '@/db/ExpoDatabase';
@@ -75,7 +76,8 @@ export function AppProviders({ children }: PropsWithChildren) {
     let disposeRuntime = () => {};
     void (async () => {
       try {
-        const openedDatabase = await ExpoDatabase.open();
+        const e2e = getE2ERuntime();
+        const openedDatabase = await ExpoDatabase.open(e2e?.databaseName);
         if (!active) {
           await openedDatabase.close();
           return;
@@ -84,11 +86,18 @@ export function AppProviders({ children }: PropsWithChildren) {
         await migrateDatabase(openedDatabase);
         if (!active) return;
         const tokenStore = new SecureTokenStore(openedDatabase);
+        if (e2e !== null) {
+          const response = await fetch(`${E2E_ORIGIN}/__e2e/bootstrap`);
+          if (!response.ok) throw new Error('Local E2E server is unavailable');
+          const { seedE2EAccount } = await import('@/test/e2e/seed');
+          await seedE2EAccount(openedDatabase, tokenStore, await response.json());
+        }
         const syncRepository = new SyncRepository(openedDatabase);
         const notificationService = new NotificationService(
           new ExpoNotificationPlatform(),
         );
         const rebuildForAccount = async (expected?: AccountContext, assertOwner?: () => Promise<void>) => {
+          if (e2e !== null) return;
           const control = new SyncControlRepository(openedDatabase);
           const context = expected ?? await control.getLocalAccountContext();
           if (context === null) return;
@@ -129,7 +138,7 @@ export function AppProviders({ children }: PropsWithChildren) {
             db: openedDatabase, context,
             apiFactory: (lease, signal) => {
               const scheduler = new RequestScheduler(openedDatabase);
-              return new HttpWaniKaniApi({ token, signal,
+              return new HttpWaniKaniApi({ token, signal, ...(e2e === null ? {} : { baseUrl: e2e.baseUrl }),
                 schedule: (operation, requestSignal) => scheduler.run(operation, lease, requestSignal),
                 onRateLimit: (budget) => scheduler.recordBudget(budget, lease),
               });
@@ -172,7 +181,7 @@ export function AppProviders({ children }: PropsWithChildren) {
           apiFactory: (token, reservation) => {
             if (reservation === undefined) throw new Error('Missing credential reservation');
             const scheduler = new RequestScheduler(openedDatabase);
-            return new HttpWaniKaniApi({ token,
+            return new HttpWaniKaniApi({ token, ...(e2e === null ? {} : { baseUrl: e2e.baseUrl }),
               schedule: (operation, signal) => scheduler.run(operation, reservation, signal),
               onRateLimit: (budget) => scheduler.recordBudget(budget, reservation),
             });
@@ -258,7 +267,7 @@ export function AppProviders({ children }: PropsWithChildren) {
                 accessibilityRole="alert"
                 style={[theme.typography.body, { color: theme.colors.danger }]}
               >
-                Unable to open your local library. Please try again.
+                {process.env.EXPO_PUBLIC_TAATORU_E2E === '1' ? error : 'Unable to open your local library. Please try again.'}
               </Text>
               <Pressable
                 accessibilityRole="button"

@@ -134,10 +134,17 @@ export class SynchronizationEngine implements SyncEngine {
     const state = await this.options.repository.getStateSnapshot();
     const selectedWrites = this.selectWrites(state, mode);
     this.setPhase('phase-one');
-    await this.options.api
-        .getUser()
-        .then((resource) => this.options.repository.replaceUser(resource));
+    const user = await this.options.api.getUser();
+    await this.options.repository.replaceUser(user);
     await this.options.pendingWrites.sendSelectedPendingWrites(selectedWrites, now);
+    if (selectedWrites.progressIds.length > 0) {
+      // Progress can advance the account level; receipts contain no user snapshot.
+      const refreshedUser = await this.options.api.getUser();
+      if (refreshedUser.data.id !== user.data.id) {
+        throw new ApiError('The connected WaniKani account changed. Sign in again.', { status: 401 });
+      }
+      await this.options.repository.replaceUser(refreshedUser);
+    }
     const refreshedState = await this.options.repository.getStateSnapshot();
     const subjects = await this.options.api.getSubjects(
       refreshedState.cursors.subjects,

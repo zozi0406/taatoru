@@ -673,6 +673,7 @@ function EditableField({
       </Text>
       <TextInput
         accessibilityLabel={label}
+        testID={`material-${label.toLowerCase().replaceAll(' ', '-')}`}
         multiline
         onChangeText={onChangeText}
         placeholder={placeholder}

@@ -375,6 +375,7 @@ export function LessonPickerScreen({
           const checked = selection?.isSelected(row.item.subjectId) ?? false;
           return (
             <Pressable
+              testID={`lesson-subject-${row.item.subjectId}`}
               accessibilityLabel={row.item.primaryMeaning}
               accessibilityRole="checkbox"
               accessibilityState={{

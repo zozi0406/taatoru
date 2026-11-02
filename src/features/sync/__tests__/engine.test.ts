@@ -47,6 +47,8 @@ test('checks the user grant before incrementally fetching subjects', async () =>
     'user:end',
     'pending-progress:start',
     'pending-progress:end',
+    'user:start',
+    'user:end',
     'subjects:start',
     'subjects:end',
     'assignments:start',
@@ -163,7 +165,7 @@ test('phase-two resources commit independently when a sibling fails', async () =
   });
   expect(repository.replaceAssignments).not.toHaveBeenCalled();
   expect(repository.replaceStudyMaterials).toHaveBeenCalledTimes(1);
-  expect(repository.replaceUser).toHaveBeenCalledTimes(1);
+  expect(repository.replaceUser).toHaveBeenCalledTimes(2);
   expect(repository.replaceLevelProgressions).toHaveBeenCalledTimes(1);
   expect(repository.replaceVoiceActors).toHaveBeenCalledTimes(1);
   expect(repository.replaceReviewStatistics).toHaveBeenCalledTimes(1);
@@ -365,3 +367,51 @@ function syncRepository() {
     ),
   } satisfies SyncDataRepository;
 }
+
+
+test('quick progress delivery refreshes user before subject cursors and finalizers', async () => {
+  const repository = syncRepository();
+  const api = eventApi([]);
+  const before = { ...userFixture, data: { ...userFixture.data, level: 3, subscription: { ...userFixture.data.subscription, max_level_granted: 3 } } };
+  const after = { ...before, data: { ...before.data, level: 4,
+    subscription: { ...before.data.subscription, max_level_granted: 60 } } };
+  api.getUser.mockResolvedValueOnce(before).mockResolvedValue(after);
+  let persisted: Awaited<ReturnType<WaniKaniApi['getUser']>> = before;
+  const original = await repository.getStateSnapshot();
+  repository.replaceUser.mockImplementation(async user => { persisted = user; });
+  repository.getStateSnapshot.mockImplementation(async () => ({ ...original,
+    cursors: { ...original.cursors, subjects: persisted === after ? null : original.cursors.subjects } }));
+  const finalizer = jest.fn(() => { expect(persisted.data.level).toBe(4); });
+  const engine = new SynchronizationEngine({ api, repository, pendingWrites: eventPendingWrites([]),
+    isOnline: async () => true, now: () => NOW, invalidate: finalizer, updateNotifications: finalizer });
+  expect((await engine.synchronize('quick')).status).toBe('completed');
+  expect(repository.replaceUser.mock.calls.map(([u]) => u.data.level)).toEqual([3, 4]);
+  expect(api.getSubjects).toHaveBeenCalledWith(null);
+  expect(finalizer).toHaveBeenCalledTimes(2);
+});
+
+test.each([{ materialIds: [] }, { materialIds: [2] }])('quick sync without progress avoids an additional user read ($materialIds)', async ({ materialIds }) => {
+  const repository = syncRepository(); const snapshot = await repository.getStateSnapshot();
+  repository.getStateSnapshot.mockResolvedValue({ ...snapshot, progressIds: [], studyMaterialIds: materialIds });
+  const api = eventApi([]);
+  const engine = new SynchronizationEngine({ api, repository, pendingWrites: eventPendingWrites([]),
+    isOnline: async () => true, now: () => NOW, invalidate: () => {}, updateNotifications: () => {} });
+  expect((await engine.synchronize('quick')).status).toBe('completed');
+  expect(api.getUser).toHaveBeenCalledTimes(1);
+});
+
+test.each(['unavailable', 'different-account'])('post-delivery user %s prevents successful metadata completion', async kind => {
+  const repository = syncRepository(); const api = eventApi([]);
+  api.getUser.mockResolvedValueOnce(userFixture);
+  if (kind === 'unavailable') api.getUser.mockRejectedValueOnce(new Error('User unavailable'));
+  else api.getUser.mockResolvedValueOnce({ ...userFixture, data: { ...userFixture.data, id: 'another-account' } });
+  const delivery = jest.fn(async () => {});
+  const engine = new SynchronizationEngine({ api, repository, pendingWrites: { sendSelectedPendingWrites: delivery },
+    isOnline: async () => true, now: () => NOW, invalidate: () => {}, updateNotifications: () => {} });
+  const result = await engine.synchronize('quick');
+  expect(result.status).toBe('failed');
+  if (kind === 'different-account' && result.status === 'failed') expect(result.error.status).toBe(401);
+  expect(repository.markSyncCompleted).not.toHaveBeenCalled();
+  expect(repository.replaceUser).toHaveBeenCalledTimes(1);
+  expect(delivery).toHaveBeenCalledTimes(1);
+});

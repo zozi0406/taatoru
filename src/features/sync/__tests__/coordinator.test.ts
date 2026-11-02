@@ -91,3 +91,25 @@ test('a persisted future retry wakes while foregrounded without a connectivity t
     expect(coordinator.store.getState().lastResult?.queue?.pending).toBe(0);
   } finally { coordinator?.dispose(); jest.useRealTimers(); await db.close(); }
 });
+
+test('failed metadata refresh retries automatically even when accepted writes left an empty outbox', async () => {
+  jest.useFakeTimers(); jest.setSystemTime(SYNC_NOW);
+  const db = await syncDatabase();
+  let coordinator: SyncCoordinator | undefined;
+  try {
+    const control = new SyncControlRepository(db);
+    const context = await control.activateCredentials(await control.beginCredentialTransition(), 'account', true);
+    const synchronize = jest.fn<ReturnType<SyncEngine['synchronize']>, Parameters<SyncEngine['synchronize']>>()
+      .mockResolvedValueOnce({ status: 'failed', error: { kind: 'network', message: 'User unavailable',
+        status: null, safeUrl: null, retryAt: null, hibernating: false } })
+      .mockResolvedValue({ status: 'completed', updatedResources: 1 });
+    coordinator = new SyncCoordinator({ db, context, engine: { synchronize } });
+    const first = await coordinator.request('enqueue');
+    expect(first.status).toBe('failed');
+    expect(first.queue?.pending).toBe(0);
+    await jest.advanceTimersByTimeAsync(2_000);
+    expect(synchronize).toHaveBeenCalledTimes(2);
+    expect(coordinator.store.getState().lastResult?.status).toBe('completed');
+    expect(coordinator.store.getState().lastResult?.queue?.pending).toBe(0);
+  } finally { coordinator?.dispose(); jest.useRealTimers(); await db.close(); }
+});

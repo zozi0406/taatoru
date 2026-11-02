@@ -1,3 +1,4 @@
+import { PendingWriteRepository } from '../PendingWriteRepository';
 import type { WaniKaniApi } from '@/api/WaniKaniApi';
 import { migrateDatabase } from '@/db/migrate';
 import { NodeTestDatabase } from '@/db/NodeTestDatabase';
@@ -99,3 +100,32 @@ test.each(['rotation', 'expiry', 'new-owner'] as const)(
     } finally { release?.(); await db.close(); }
   },
 );
+
+
+test('a post-delivery user response cannot commit after credential rotation', async () => {
+  const db = await syncDatabase();
+  let release!: () => void; let enter!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  try {
+    const control = new SyncControlRepository(db); const api = new FixtureSyncApi();
+    const context = await control.activateCredentials(await control.beginCredentialTransition(), api.user.data.id, false);
+    await new PendingWriteRepository(db).completeReview({ assignmentId: 501, subjectId: 201,
+      incorrectMeaningAnswers: 0, incorrectReadingAnswers: 0, completedAt: SYNC_NOW });
+    let calls = 0;
+    api.getUser = async () => {
+      if (++calls === 3) { enter(); await blocked; return { ...api.user, data: { ...api.user.data, level: 59 } }; }
+      return api.user;
+    };
+    const notifications = jest.fn();
+    const running = new OwnedSyncEngine({ db, context, apiFactory: () => api, isOnline: async () => true,
+      now: () => SYNC_NOW, invalidate: () => {}, updateNotifications: notifications }).synchronize('quick');
+    const reached = await Promise.race([entered.then(() => 'blocked'), running.then(() => 'finished')]);
+    expect(reached).toBe('blocked');
+    await control.beginCredentialTransition();
+    release();
+    expect((await running).status).toBe('failed');
+    expect((await db.first<{ level: number }>('SELECT level FROM user'))?.level).not.toBe(59);
+    expect(notifications).not.toHaveBeenCalled();
+  } finally { release?.(); await db.close(); }
+});
