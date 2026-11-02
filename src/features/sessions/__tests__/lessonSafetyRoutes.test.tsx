@@ -82,3 +82,97 @@ test('rechecks lesson availability when a focused app returns from the backgroun
     await rendered.unmount();
   } finally { subscription.mockRestore(); await db.close(); }
 });
+
+test.each(['meaning', 'reading'] as const)(
+  'foreground restore waits for an in-flight %s save and blocks answers until the snapshot is installed',
+  async (prompt) => {
+    const db = await syncDatabase();
+    mockDatabase = db;
+    let resume: ((state: AppStateStatus) => void) | undefined;
+    const subscription = jest.spyOn(AppState, 'addEventListener').mockImplementation((_event, listener) => {
+      resume = listener;
+      return { remove: jest.fn() };
+    });
+    const saveGate = deferred();
+    const saveEntered = deferred();
+    const readGate = deferred();
+    const readEntered = deferred();
+    let saveSpy: jest.SpyInstance | undefined;
+    let readSpy: jest.SpyInstance | undefined;
+    try {
+      await db.run('UPDATE assignments SET srs_stage = 0, started_at = NULL WHERE id = 501');
+      const sessions = new SessionRepository(db);
+      await sessions.startLessonSession([{
+        assignmentId: 501, subjectId: 201, available: true, excluded: false,
+        lessonPosition: 1, level: 1, subjectType: 'kanji',
+      }]);
+      const rendered = await renderApp(<ThemeProvider scheme="light"><LessonSessionRoute /></ThemeProvider>);
+      await screen.findByRole('button', { name: 'Continue to quiz' });
+      await fireEvent.press(screen.getByRole('button', { name: 'Continue to quiz' }));
+      await screen.findByLabelText('Meaning answer');
+      if (prompt === 'reading') {
+        await fireEvent.changeText(screen.getByLabelText('Meaning answer'), 'one');
+        await fireEvent.press(screen.getByRole('button', { name: 'Submit answer' }));
+        await screen.findByLabelText('Reading answer');
+      }
+      const commit = SessionRepository.prototype.commitLessonTransition;
+      saveSpy = jest.spyOn(SessionRepository.prototype, 'commitLessonTransition').mockImplementation(async function (...args) {
+        saveEntered.resolve();
+        await saveGate.promise;
+        return commit.apply(sessions, args);
+      });
+      const loadSubjects = SessionRepository.prototype.loadLessonSubjects;
+      readSpy = jest.spyOn(SessionRepository.prototype, 'loadLessonSubjects').mockImplementation(async function (...args) {
+        const subjects = await loadSubjects.apply(sessions, args);
+        readEntered.resolve();
+        await readGate.promise;
+        return subjects;
+      });
+      await fireEvent.changeText(screen.getByLabelText(prompt === 'meaning' ? 'Meaning answer' : 'Reading answer'), prompt === 'meaning' ? 'one' : 'いち');
+      await fireEvent.press(screen.getByRole('button', { name: 'Submit answer' }));
+      await saveEntered.promise;
+      await act(async () => { resume?.('active'); });
+      await act(async () => { saveGate.resolve(); });
+      await act(async () => { await readEntered.promise; });
+      if (prompt === 'meaning') {
+        await fireEvent.changeText(screen.getByLabelText('Reading answer'), 'いち');
+        expect(screen.getByRole('button', { name: 'Submit answer' })).toBeDisabled();
+        await fireEvent.press(screen.getByRole('button', { name: 'Submit answer' }));
+        expect(await db.first('SELECT COUNT(*) AS count FROM pending_progress')).toEqual({ count: 0 });
+      } else {
+        await fireEvent.press(screen.getByRole('button', { name: 'Finish lessons' }));
+        expect(await sessions.loadLessonSession()).not.toBeNull();
+      }
+      await act(async () => { readGate.resolve(); });
+      if (prompt === 'meaning') {
+        await screen.findByLabelText('Reading answer');
+        expect(await sessions.loadLessonSession()).toMatchObject({
+          quizState: { completedSubjectIds: [], questionProgress: { answeredMeaningSubjectIds: [201] } },
+        });
+        expect(await db.first('SELECT COUNT(*) AS count FROM pending_progress')).toEqual({ count: 0 });
+        // A subsequent save must extend the retained half rather than overwrite it.
+        await fireEvent.changeText(screen.getByLabelText('Reading answer'), 'いち');
+        await fireEvent.press(screen.getByRole('button', { name: 'Submit answer' }));
+      }
+      await screen.findByText('Lesson complete');
+      expect(await sessions.loadLessonSession()).toMatchObject({
+        phase: 'complete', quizState: { completedSubjectIds: [201] },
+      });
+      expect(await db.first('SELECT COUNT(*) AS count FROM pending_progress')).toEqual({ count: 1 });
+      await rendered.unmount();
+    } finally {
+      saveGate.resolve();
+      readGate.resolve();
+      saveSpy?.mockRestore();
+      readSpy?.mockRestore();
+      subscription.mockRestore();
+      await db.close();
+    }
+  },
+);
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((complete) => { resolve = complete; });
+  return { promise, resolve };
+}

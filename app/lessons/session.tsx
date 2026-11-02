@@ -1,5 +1,5 @@
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, Modal, Text, View } from 'react-native';
 
 import type { SubjectResource } from '@/api/types';
@@ -39,15 +39,24 @@ export default function LessonSessionRoute() {
   >({});
   const [error, setError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
+  const [restoring, setRestoring] = useState(true);
+  const restoringRef = useRef(true);
+  const pendingTransition = useRef<Promise<void> | null>(null);
 
   const reloadSession = () => {
+    restoringRef.current = true;
+    setRestoring(true);
     setSnapshot(null);
     setSubjects(null);
     setReload((value) => value + 1);
   };
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
-      if (state === 'active') setReload((value) => value + 1);
+      if (state === 'active') {
+        restoringRef.current = true;
+        setRestoring(true);
+        setReload((value) => value + 1);
+      }
     });
     return () => subscription.remove();
   }, []);
@@ -55,10 +64,15 @@ export default function LessonSessionRoute() {
   useStudyMaterialRefresh(db, subjects, setMaterials, subscribeToData);
   useFocusEffect(useCallback(() => {
     let active = true;
+    restoringRef.current = true;
+    setRestoring(true);
     setError(null);
-    void sessions
-      .loadLessonSession()
+    // Finish an accepted save before choosing the snapshot that will be displayed.
+    void Promise.resolve(pendingTransition.current)
+      .catch(() => undefined)
+      .then(() => sessions.loadLessonSession())
       .then(async (loaded) => {
+        if (!active) return;
         if (loaded === null || loaded.phase === 'selection') {
           if (active) router.replace('/lessons/picker');
           return;
@@ -84,6 +98,8 @@ export default function LessonSessionRoute() {
           setMaterials(studyMaterials);
           setSnapshot(restored);
           setSubjects(loadedSubjects);
+          restoringRef.current = false;
+          setRestoring(false);
         }
       })
       .catch(() => {
@@ -145,16 +161,27 @@ export default function LessonSessionRoute() {
           );
         }}
         initialSnapshot={snapshot}
-        onCommitTransition={(transition) =>
-          sessions
-            .commitLessonTransition(
-              transition.completedItem,
-              transition.snapshot,
-            )
-            .then(() => { notifyPendingWrites(); })
-        }
+        restoring={restoring}
+        onCommitTransition={async (transition) => {
+          if (restoringRef.current) {
+            throw new Error('Lesson restoration is in progress.');
+          }
+          const operation = sessions.commitLessonTransition(
+            transition.completedItem,
+            transition.snapshot,
+          ).then(() => { notifyPendingWrites(); });
+          pendingTransition.current = operation;
+          try {
+            await operation;
+          } finally {
+            if (pendingTransition.current === operation) {
+              pendingTransition.current = null;
+            }
+          }
+        }}
         onExit={() => router.replace('/')}
         onFinish={async () => {
+          if (restoringRef.current) return;
           await sessions.clearLessonSession();
           router.replace('/');
         }}

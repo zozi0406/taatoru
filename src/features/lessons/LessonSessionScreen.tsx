@@ -20,6 +20,7 @@ import { LessonQuizStage } from './LessonQuizStage';
 import { LessonSubjectStage } from './LessonSubjectStage';
 
 interface LessonSessionScreenProps {
+  readonly restoring?: boolean;
   readonly initialSnapshot: LessonSessionSnapshot;
   readonly onCommitTransition: (transition: LessonTransition) => Promise<void>;
   readonly onExit: () => void;
@@ -36,6 +37,7 @@ interface LessonSessionScreenProps {
 
 export function LessonSessionScreen({
   initialSnapshot,
+  restoring = false,
   onCommitTransition,
   onExit,
   onReload,
@@ -63,6 +65,7 @@ export function LessonSessionScreen({
     subjects.map((subject) => [subject.id, subject.object]),
   );
   const apply = async (type: Parameters<typeof reduceLesson>[1]['type']) => {
+    if (!mounted.current) throw new Error('Lesson session is no longer active.');
     const result = reduceLesson(snapshot, { type }, types, settings);
     try {
       await onCommitTransition(result);
@@ -95,7 +98,7 @@ export function LessonSessionScreen({
     apply,
   });
   const present = async (type: Parameters<typeof reduceLesson>[1]['type']) => {
-    if (presenting.current) return;
+    if (presenting.current || restoring) return;
     presenting.current = true;
     setPresentationBusy(true);
     setPresentationError(null);
@@ -134,7 +137,7 @@ export function LessonSessionScreen({
         count={snapshot.items.length}
         detail="new subjects added to Apprentice"
         finishLabel="Finish lessons"
-        onFinish={onFinish}
+        onFinish={async () => { if (!restoring) await onFinish(); }}
       />
     );
   const item = snapshot.items[snapshot.queuePosition];
@@ -158,11 +161,11 @@ export function LessonSessionScreen({
         subject={subject}
         material={studyMaterials[subject.id]}
         onPlayAudio={playAudio}
-        busy={presentationBusy}
+        busy={presentationBusy || restoring}
         error={presentationError}
-        onExit={() => { if (!presenting.current) onExit(); }}
-        onSettings={onSettings === undefined ? undefined : () => { if (!presenting.current) onSettings(); }}
-        onOpenSubject={onOpenSubject === undefined ? undefined : (id) => { if (!presenting.current) onOpenSubject(id); }}
+        onExit={() => { if (!presenting.current && !restoring) onExit(); }}
+        onSettings={onSettings === undefined ? undefined : () => { if (!presenting.current && !restoring) onSettings(); }}
+        onOpenSubject={onOpenSubject === undefined ? undefined : (id) => { if (!presenting.current && !restoring) onOpenSubject(id); }}
         onNext={() => {
           void present('advance-presentation');
         }}
@@ -180,34 +183,34 @@ export function LessonSessionScreen({
     <LessonQuizStage
       key={`${subject.id}-${prompt}-${actions.revision}`}
       feedback={actions.feedback}
-      busy={actions.busy}
+      busy={actions.busy || restoring}
       error={actions.error}
       settings={settings}
       index={snapshot.quizState.completedSubjectIds.length}
       total={snapshot.items.length}
       subject={subject}
       prompt={prompt}
-      onExit={() => actions.guard(onExit)}
-      onSettings={onSettings === undefined ? undefined : () => actions.guard(onSettings)}
-      onOpenSubject={onOpenSubject === undefined ? undefined : (id) => actions.guard(() => onOpenSubject(id))}
+      onExit={() => { if (!restoring) actions.guard(onExit); }}
+      onSettings={onSettings === undefined ? undefined : () => { if (!restoring) actions.guard(onSettings); }}
+      onOpenSubject={onOpenSubject === undefined ? undefined : (id) => { if (!restoring) actions.guard(() => onOpenSubject(id)); }}
       onPlayAudio={playAudio}
       material={studyMaterials[subject.id]}
       onSubmit={(answer) =>
-        actions.submit(
+        !restoring && actions.submit(
           answer,
           prompt,
           subject,
           studyMaterials[subject.id]?.meaningSynonyms,
         )
       }
-      onContinue={actions.continue}
-      onOverride={actions.override}
-      onSkip={actions.skip}
-      onRetrySave={actions.retrySave}
+      onContinue={() => { if (!restoring) actions.continue(); }}
+      onOverride={() => { if (!restoring) actions.override(); }}
+      onSkip={() => { if (!restoring) actions.skip(); }}
+      onRetrySave={() => { if (!restoring) actions.retrySave(); }}
       onAddSynonym={
         actions.addSynonym === undefined
           ? undefined
-          : (answer) => actions.addSynonym!(subject.id, answer)
+          : (answer) => { if (!restoring) actions.addSynonym!(subject.id, answer); }
       }
     />
   );
