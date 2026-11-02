@@ -219,7 +219,8 @@ const options = parseRunnerArgs(process.argv.slice(2));
     throw new Error('Durable work did not settle; inspect final/rows.json');
   if (options.suite === 'wrap-up') {
     const remaining = state.assignments.filter(item => !wrappedAssignmentIds.includes(item.id) && due.some(original => original.id === item.id));
-    if (remaining.length !== due.length - 4 || remaining.some(item => item.available_at > new Date().toISOString()))
+    if (remaining.length !== due.length - 4 || remaining.some(item => item.available_at === null ||
+        new Date(item.available_at).getTime() > Date.now() || item.started_at === null || item.srs_stage < 1 || item.srs_stage >= 9))
       throw new Error('Untouched review assignments did not remain due in SQLite');
     if (state.active_sessions.some(item => item.kind === 'review')) throw new Error('Finished wrap-up left a saved review session');
   }
