@@ -1,7 +1,8 @@
 /** @jest-environment node */
 import { execFileSync } from 'node:child_process';
-import { parseRunnerArgs, selectDevice, reviewCommands, developmentClientLaunchUrl, developmentClientLaunchCommand, wrapUpCommands, readingInputCommands } from '../runner/flows';
+import { parseRunnerArgs, selectDevice, reviewCommands, developmentClientLaunchUrl, developmentClientLaunchCommand, wrapUpCommands, readingInputCommands, homeReadyCommands } from '../runner/flows';
 import { createScenario } from '../scenarios/factory';
+import { seedCachedRadical } from '../runner/media';
 
 test('isolated development launch suppresses developer onboarding without changing app routes', () => {
   const launch = new URL(developmentClientLaunchUrl());
@@ -19,6 +20,13 @@ test('Android shell receives the complete development URL as one argument', () =
   ], { encoding: 'utf8' });
   expect(output.trim().split('\n')).toEqual([
     'start', '-a', 'android.intent.action.VIEW', '-d', developmentClientLaunchUrl(), 'app.taatoru.e2e',
+  ]);
+});
+
+test('restart readiness waits for loaded dashboard actions after its loading container appears', () => {
+  expect(homeReadyCommands()).toEqual([
+    { extendedWaitUntil: { visible: { id: 'home-dashboard' }, timeout: 120000 } },
+    { extendedWaitUntil: { visible: 'Start reviews', timeout: 120000 } },
   ]);
 });
 
@@ -76,10 +84,22 @@ test('reading input suite types n syllables as separate native input events befo
   const scenario = createScenario('smoke');
   const commands = readingInputCommands(scenario, 1021);
   expect(parseRunnerArgs(['--suite', 'reading-input']).scenario).toBe('smoke');
-  expect(commands).toContainEqual({ assertVisible: 'あんない' });
-  expect(commands).toContainEqual({ assertVisible: 'こんにちは' });
+  expect(commands).toContainEqual({ assertVisible: 'あんあい' });
+  expect(commands).toContainEqual({ assertVisible: 'こんいちは' });
   expect(commands.filter(command => command.inputText === 'n')).toHaveLength(4);
   expect(JSON.stringify(commands)).toContain('Finish lessons');
+});
+
+test('media-cache workload uses an original image-only subject and durable app files', () => {
+  const scenario = createScenario('smoke');
+  const fixture = seedCachedRadical(scenario);
+  const subject = scenario.subjects.find(item => item.id === fixture.subjectId)!;
+  expect(subject.data.characters).toBeNull();
+  expect(fixture.path.startsWith('files/radical-images-v1/')).toBe(true);
+  const payload = JSON.parse(fixture.payload);
+  expect(payload.key).toBe('https://synthetic-media.invalid/original-square.svg\nimage/svg+xml');
+  expect(payload.image.content).toContain('M1 1h8v8H1z');
+  expect(parseRunnerArgs(['--suite', 'media-cache']).scenario).toBe('smoke');
 });
 
 

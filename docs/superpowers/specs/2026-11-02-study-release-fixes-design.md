@@ -4,7 +4,7 @@ The user authorized fixing the eight findings in the 2 November lesson/review au
 
 ## Behavior
 
-- Preserve composition of consecutive nasal consonants during kana input, including `annai`, `konnichiha`, `shinnyuu`, standalone `nn`, trailing n/m, deletion and paste. Preserve `n'` until reading conversion.
+- User correction: preserve original Japanese-keyboard behavior: `nn` commits `ん`, so incrementally typed `annai` produces `あんあい`. Revert the hidden pending-n composition change; preserve original trailing n/m, deletion and paste behavior. Preserve `n'` until romaji reading conversion (a separate grading correction).
 - Revalidate saved lesson assignments on resume and within the completion transaction, retaining committed work and eligible progress. Unavailable/replaced assignments must not queue invalid starts. Offer retry, home and safe reload on lesson failures.
 - Use WaniKani's count-dependent local SRS penalty, bounded to stages 1–9. Do not fabricate due times.
 - Make image-only radicals durably available offline through an explicit asset cache, with load/error/retry behavior and neutral pre-answer accessibility labels. Keep asset state independent of assignment state and credentials. Do not import reference-app assets or new frameworks.

@@ -1,6 +1,6 @@
 # Local mutation E2E harness
 
-This harness runs the real Android routes, SQLite session commits, account ownership, paced sync coordinator and HTTP client against an in-memory loopback API. It uses original, visibly synthetic learning items. No real API token or account is needed. Login, exact WaniKani SRS scheduling, media and OS-scheduled background delivery are not tested.
+This harness runs the real Android routes, SQLite session commits, account ownership, paced sync coordinator and HTTP client against an in-memory loopback API. It uses original, visibly synthetic learning items. No real API token or account is needed. Login, exact WaniKani SRS scheduling, live media downloads and OS-scheduled background delivery are not tested.
 
 ## Prerequisites
 
@@ -35,9 +35,16 @@ npm run e2e:android -- --suite bounds --serial emulator-5554
 npm run e2e:android -- --suite preacceptance --serial emulator-5554
 npm run e2e:android -- --suite quota --serial emulator-5554
 npm run e2e:android -- --suite rejected --serial emulator-5554
+npm run e2e:android -- --suite reading-input --serial emulator-5554
+npm run e2e:android -- --suite wrap-up --serial emulator-5554
+npm run e2e:android -- --suite media-cache --serial emulator-5554
 ```
 
-The runner validates the APK package before installing or clearing data. It starts its own API and Metro, bridges IPv6 localhost to IPv4 for adb reverse, disables dotenv loading, precompiles an explicit entry using the real application routes, and generates Maestro commands from the original answer manifest. Ports 8787, 8090 and 8091 must be free. An existing reverse mapping causes a clear error rather than being replaced. `--apk`, `--seed`, `--scenario` and `--maestro` are optional overrides; unknown options/suites and ambiguous devices fail before resetting the app.
+The runner validates the APK package before installing or clearing data. It starts its own API and Metro, bridges IPv6 localhost to IPv4 for adb reverse, disables dotenv loading, precompiles an explicit entry using the real application routes, and generates Maestro commands from the original answer manifest. Supported Expo launcher flags suppress developer onboarding and its floating button; the real dashboard and loaded actions must still appear. Ports 8787, 8090 and 8091 must be free. An existing reverse mapping causes a clear error rather than being replaced. `--apk`, `--seed`, `--scenario` and `--maestro` are optional overrides; unknown options/suites and ambiguous devices fail before resetting the app.
+
+Reading-input switches the real settings screen to kana input, types separate keystrokes and verifies immediate `nn` commitment (`annai` becomes `あんあい`, as on the requested Japanese keyboard), then completes one lesson normally. Wrap-up retains a genuine mistake, finishes a begun reading half, checks 75% accuracy and missed-subject results, and verifies that eight untouched reviews remain due in both server and SQLite state. Media-cache seeds one original SVG into the isolated app's durable document files under an unreachable HTTPS media URL, checks rendering before/after force-stop, then submits one review normally. This verifies native cache reading/rendering/restart, not a live media download; controlled cache tests cover the download and failure boundaries.
+
+Do not run `uiautomator dump`, another Maestro session or a competing accessibility automation client while a suite is active. Android permits only one UI-automation registration. Failure screenshots and logs are captured after Maestro exits. Cleanup attempts every owned release even when one close fails. On macOS, a runner-scoped `caffeinate` process prevents host sleep from pausing the emulator mid-input; it does not change persistent power settings.
 
 Each run resets only the E2E app and fake server. Resume steps preserve both sides, including credentials, saved sessions, pending revisions, dispatch evidence and lease deadlines. A force-stop can leave the real two-minute lease outstanding; recovery deliberately waits for the production ownership rules. Request spacing/backoff remain real, so device suites take minutes rather than seconds.
 

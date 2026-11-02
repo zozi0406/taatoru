@@ -6,15 +6,16 @@ const { stringify } = require('yaml');
 const { captureFile } = require('../../e2e/runner/capture.ts');
 const { startMetroBridge } = require('../../e2e/runner/metro.ts');
 const { cleanupRunnerResources } = require('../../e2e/runner/cleanup.ts');
+const { seedCachedRadical } = require('../../e2e/runner/media.ts');
 const { startMockServer } = require('../../e2e/mock/server.ts');
-const { parseRunnerArgs, selectDevice, waitFor, tap, reviewCommands, lessonCommands, answerCommands, assertReviewJournal, cancelLessonCommands, assertRetryTimestamps, developmentClientLaunchCommand, readingInputCommands, wrapUpCommands } = require('../../e2e/runner/flows.ts');
+const { parseRunnerArgs, selectDevice, waitFor, tap, reviewCommands, lessonCommands, answerCommands, assertReviewJournal, cancelLessonCommands, assertRetryTimestamps, developmentClientLaunchCommand, readingInputCommands, wrapUpCommands, homeReadyCommands } = require('../../e2e/runner/flows.ts');
 const ROOT = path.resolve(__dirname, '../..');
 const APP = 'app.taatoru.e2e';
 const SDK = process.env.ANDROID_HOME || path.join(process.env.HOME, 'Library/Android/sdk');
 const ADB = process.env.ADB || path.join(SDK, 'platform-tools/adb');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const output = path.join(ROOT, '.expo/e2e', new Date().toISOString().replace(/[:.]/g, '-'));
-let server, metro, serial, bridge, activeTool;
+let server, metro, serial, bridge, activeTool, keepAwake;
 let interrupted = false;
 for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { interrupted = true; activeTool?.kill('SIGTERM'); metro?.kill('SIGTERM'); });
 const mappings = [];
@@ -57,6 +58,12 @@ function launch() {
 }
 const options = parseRunnerArgs(process.argv.slice(2));
 (async () => {
+  // A sleeping host pauses the emulator/driver mid-input while wall-clock timeouts expire.
+  // Scope the assertion to this runner; never change persistent user power settings.
+  if (process.platform === 'darwin') {
+    keepAwake = spawn('/usr/bin/caffeinate', ['-i', '-s', '-w', String(process.pid)], { stdio: 'ignore' });
+    keepAwake.on('error', error => { console.warn('Unable to keep E2E host awake:', error.message); });
+  }
   // Validate tools, package identity and device BEFORE clearing or installing anything.
   const maestro = spawnSync(options.maestro || process.env.MAESTRO_BIN || 'maestro', ['--version'], { env: { ...process.env, MAESTRO_CLI_NO_ANALYTICS: '1' } });
   if (maestro.error || maestro.status !== 0 || !/2\.12\.0/.test(maestro.stdout?.toString() || '')) throw new Error('Maestro 2.12.0 is required; set MAESTRO_BIN (see e2e/README.md)');
@@ -67,6 +74,7 @@ const options = parseRunnerArgs(process.argv.slice(2));
   if (!manifest.includes("package: name='app.taatoru.e2e'")) throw new Error('Refusing to install/reset a non-E2E APK. Build with EXPO_PUBLIC_TAATORU_E2E=1.');
   fs.mkdirSync(output, { recursive: true });
   server = await startMockServer({ scenario: options.scenario, seed: options.seed });
+  const cachedRadical = options.suite === 'media-cache' ? seedCachedRadical(server.world.scenario) : undefined;
   const oldMappings = adb(['reverse', '--list']).toString();
   for (const port of [8787, 8091]) {
     if (oldMappings.includes(`tcp:${port}`)) throw new Error(`Port ${port} is already reversed; remove or choose another device`);
@@ -87,8 +95,14 @@ const options = parseRunnerArgs(process.argv.slice(2));
   await bundle.arrayBuffer();
   adb(['install', '-r', apk], { timeout: 120000 });
   adb(['shell', 'am', 'force-stop', APP]); adb(['shell', 'pm', 'clear', APP]);
+  if (cachedRadical) {
+    const directory = cachedRadical.path.slice(0, cachedRadical.path.lastIndexOf('/'));
+    adb(['shell', 'run-as', APP, 'mkdir', '-p', directory]);
+    // Paths are generated from an encoded fixed synthetic URL, never account/user input.
+    adb(['shell', 'run-as', APP, 'sh', '-c', `'cat > ${cachedRadical.path}'`], { input: cachedRadical.payload });
+  }
   launch();
-  await flow('ready', [waitFor('home-dashboard')]);
+  await flow('ready', [...homeReadyCommands()]);
   const scenario = server.world.scenario;
   if (options.suite === 'sandbox') {
     console.log(`Synthetic sandbox ready (${options.scenario}, seed ${options.seed}). Press Ctrl-C to stop owned services.`);
@@ -99,7 +113,20 @@ const options = parseRunnerArgs(process.argv.slice(2));
   const ids = due.map(a => a.data.subject_id);
   if (!ids.length && !['bounds', 'materials'].includes(options.suite)) throw new Error('Selected suite requires due reviews');
   let wrappedAssignmentIds;
-  if (options.suite === 'reading-input') {
+  if (options.suite === 'media-cache') {
+    const id = cachedRadical.subjectId;
+    await flow('cached-radical', [tap('Start reviews'), waitFor(`study-answer-${id}-meaning`), { assertVisible: 'Radical image' }]);
+    captureFile(ADB, ['-s', serial, 'exec-out', 'screencap', '-p'], path.join(output, 'cached-radical.png'));
+    const before = snapshot('before-media-restart');
+    if (before.pending_progress.length || server.journal.some(entry => entry.accepted)) throw new Error('Viewing cached media mutated progress');
+    launch();
+    await flow('cached-radical-after-restart', [...homeReadyCommands(), tap('Start reviews'), waitFor(`study-answer-${id}-meaning`), { assertVisible: 'Radical image' }]);
+    captureFile(ADB, ['-s', serial, 'exec-out', 'screencap', '-p'], path.join(output, 'cached-radical-after-restart.png'));
+    await flow('grade-cached-radical', [...answerCommands(scenario, id, 'meaning'), tap('Exit review session'), ...homeReadyCommands()]);
+    const assignmentId = due.find(item => item.data.subject_id === id).id;
+    await poll(() => server.journal.some(entry => entry.accepted && entry.path === '/v2/reviews'), 'cached radical accepted');
+    assertReviewJournal(server.journal, [assignmentId]);
+  } else if (options.suite === 'reading-input') {
     const lesson = server.world.availableLessons().find(item => scenario.answers[item.data.subject_id]?.reading);
     if (!lesson) throw new Error('No available two-part lesson');
     await flow('reading-input', readingInputCommands(scenario, lesson.data.subject_id));
@@ -141,7 +168,7 @@ const options = parseRunnerArgs(process.argv.slice(2));
       if (materialWrites.filter(e => e.method === 'POST').length !== 1 || !materialWrites.some(e => e.method === 'PUT'))
         throw new Error('Material identity/revision did not use one create followed by update');
     }
-    await flow('materials-home', [{ back: {} }, waitFor('home-dashboard')]);
+    await flow('materials-home', [{ back: {} }, ...homeReadyCommands()]);
   } else {
     if (options.suite === 'connection-before') server.arm({ method: 'POST', path: '/v2/reviews', kind: 'drop-before' });
     if (['preacceptance', 'quota', 'rejected'].includes(options.suite)) server.arm({ method: 'POST', path: '/v2/reviews', kind: 'reject', status: options.suite === 'preacceptance' ? 500 : options.suite === 'quota' ? 429 : 422 });
@@ -153,9 +180,9 @@ const options = parseRunnerArgs(process.argv.slice(2));
       await flow('first-half', answerCommands(scenario, first, 'meaning'));
       const before = snapshot('before-resume');
       if (!before.active_sessions.length) throw new Error('No saved session before restart');
-      launch(); await flow('resume', [waitFor('home-dashboard'), tap('Start reviews'), ...answerCommands(scenario, first, 'reading'), ...reviewCommands(scenario, ids.slice(1)), tap('Finish reviews')]);
+      launch(); await flow('resume', [...homeReadyCommands(), tap('Start reviews'), ...answerCommands(scenario, first, 'reading'), ...reviewCommands(scenario, ids.slice(1)), tap('Finish reviews')]);
     } else {
-      await flow('reviews', [...reviewCommands(scenario, ids, options.suite === 'mutations'), tap('Finish reviews'), waitFor('home-dashboard')]);
+      await flow('reviews', [...reviewCommands(scenario, ids, options.suite === 'mutations'), tap('Finish reviews'), ...homeReadyCommands()]);
     }
     if (options.suite === 'rejected') {
       await poll(() => server.journal.some(e => e.path === '/v2/reviews' && e.status === 422), 'rejection observed');
@@ -198,7 +225,7 @@ const options = parseRunnerArgs(process.argv.slice(2));
       await poll(() => server.journal.some(e => e.accepted && e.path === `/v2/assignments/${lesson.id}/start`), 'selected lesson accepted');
       if (options.suite === 'smoke') {
         const automatic = server.world.availableLessons().sort((a,b) => a.data.subject_id - b.data.subject_id)[0];
-        await flow('automatic-lesson', [tap('Start lessons'), tap('Continue to quiz'), ...reviewCommands(scenario, [automatic.data.subject_id]), tap('Finish lessons'), waitFor('home-dashboard')]);
+        await flow('automatic-lesson', [tap('Start lessons'), tap('Continue to quiz'), ...reviewCommands(scenario, [automatic.data.subject_id]), tap('Finish lessons'), ...homeReadyCommands()]);
         await poll(() => server.journal.some(e => e.accepted && e.path === `/v2/assignments/${automatic.id}/start`), 'automatic lesson accepted');
       }
       await flow('cancel', cancelLessonCommands(server.world.availableLessons()[0].data.subject_id));
@@ -256,6 +283,7 @@ const options = parseRunnerArgs(process.argv.slice(2));
   }
 }).finally(async () => {
   await cleanupRunnerResources([
+    () => { keepAwake?.kill('SIGTERM'); },
     ...mappings.map(port => () => { adb(['reverse', '--remove', `tcp:${port}`]); }),
     async () => {
       if (metro && metro.exitCode === null) await new Promise(resolve => {
