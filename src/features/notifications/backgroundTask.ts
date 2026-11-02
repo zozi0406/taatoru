@@ -1,3 +1,4 @@
+import { getE2ERuntime } from '@/test/e2e/runtime';
 import * as BackgroundTask from 'expo-background-task';
 import * as Network from 'expo-network';
 import * as TaskManager from 'expo-task-manager';
@@ -30,12 +31,14 @@ TaskManager.defineTask(REVIEW_BACKGROUND_TASK, async () => {
 });
 
 export function registerReviewBackgroundTask(): Promise<void> {
+  if (getE2ERuntime() !== null) return Promise.resolve();
   return BackgroundTask.registerTaskAsync(REVIEW_BACKGROUND_TASK, {
     minimumInterval: 15,
   });
 }
 
 export async function runBackgroundQuickSync(): Promise<boolean> {
+  if (getE2ERuntime() !== null) return true;
   const db = await ExpoDatabase.open();
   try {
     await migrateDatabase(db);

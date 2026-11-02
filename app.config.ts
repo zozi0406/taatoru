@@ -1,19 +1,23 @@
 import type { ExpoConfig } from 'expo/config';
 
+const localE2E = process.env.EXPO_PUBLIC_TAATORU_E2E === '1';
+if (localE2E && (process.env.EAS_BUILD === 'true' || process.env.EAS_BUILD_PROFILE))
+  throw new Error('Local E2E configuration cannot be used for EAS builds');
+
 const config: ExpoConfig = {
-  name: 'Taatoru',
+  name: localE2E ? 'Taatoru local E2E' : 'Taatoru',
   slug: 'taatoru',
   owner: 'zozi0406',
   version: '0.1.0',
   orientation: 'default',
-  scheme: 'taatoru',
+  scheme: localE2E ? 'taatoru-e2e' : 'taatoru',
   userInterfaceStyle: 'automatic',
   icon: './assets/images/icon.png',
   ios: {
     bundleIdentifier: 'app.taatoru',
   },
   android: {
-    package: 'app.taatoru',
+    package: localE2E ? 'app.taatoru.e2e' : 'app.taatoru',
     versionCode: 1,
     adaptiveIcon: {
       foregroundImage: './assets/images/adaptive-icon.png',
@@ -24,6 +28,7 @@ const config: ExpoConfig = {
     policy: 'appVersion',
   },
   extra: {
+    ...(localE2E ? { localE2E: true } : {}),
     router: {
       root: 'app',
     },
@@ -32,6 +37,7 @@ const config: ExpoConfig = {
     },
   },
   plugins: [
+    './plugins/with-non-replaying-api-writes.cjs',
     'expo-router',
     'expo-background-task',
     'expo-asset',

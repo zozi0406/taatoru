@@ -218,6 +218,7 @@ export function StudyQuestion({
         </View>
         <TextInput
           ref={input}
+          testID={`study-answer-${subject.id}-${prompt}`}
           autoFocus
           accessibilityLabel={`${prompt === 'meaning' ? 'Meaning' : 'Reading'} answer`}
           autoCapitalize="none"

@@ -15,11 +15,16 @@
     "validate:release": "node scripts/release/validate-release-ref.mjs",
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
-    "verify": "npm run lint && npm run typecheck && npm test -- --runInBand && npm run test:release-config",
-    "prebuild:check": "expo prebuild --clean --no-install"
+    "verify": "npm run lint && npm run typecheck && npm test -- --runInBand && npm run test:release-config && npm run test:e2e:tooling",
+    "prebuild:check": "expo prebuild --clean --no-install",
+    "mock:api": "node scripts/e2e/serve.cjs",
+    "e2e:android": "node scripts/e2e/android.cjs",
+    "test:e2e:contracts": "jest --runInBand e2e/__tests__",
+    "test:e2e:tooling": "node --test scripts/e2e/*.test.cjs"
   },
   "dependencies": {
     "expo": "~57.0.31",
+    "expo-application": "~57.0.3",
     "expo-asset": "~57.0.20",
     "expo-audio": "~57.0.5",
     "expo-background-task": "~57.0.21",
