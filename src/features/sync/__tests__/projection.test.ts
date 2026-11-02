@@ -82,3 +82,21 @@ test('rejects invalid completion inputs', () => {
     }),
   ).toThrow('incorrectMeaningAnswers');
 });
+
+test.each([
+  [8, 1, 0, 6],
+  [6, 1, 2, 2],
+  [4, 2, 1, 2],
+  [5, 1, 1, 3],
+  [1, 3, 3, 1],
+])('demotes stage %i with %i meaning and %i reading mistakes to %i', (stage, meaning, reading, expected) => {
+  expect(
+    projectSrsStage({
+      kind: 'review',
+      currentSrsStage: stage,
+      incorrectMeaningAnswers: meaning,
+      incorrectReadingAnswers: reading,
+      now: NOW,
+    }),
+  ).toEqual({ srsStage: expected, lastMistakeAt: NOW.toISOString() });
+});

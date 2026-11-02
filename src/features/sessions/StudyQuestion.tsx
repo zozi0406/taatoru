@@ -85,6 +85,7 @@ export function StudyQuestion({
   const insets = useSafeAreaInsets();
   const input = useRef<TextInput>(null);
   const [answer, setAnswer] = useState('');
+  const pendingN = useRef(false);
   const [showAll, setShowAll] = useState(settings.showFullAnswer);
   const graded = feedback !== null && feedback.verdict !== 'retry';
   useEffect(() => {
@@ -225,13 +226,25 @@ export function StudyQuestion({
           autoCorrect={false}
           spellCheck={false}
           editable={!graded && !busy}
-          onChangeText={(value) =>
-            setAnswer(
-              prompt === 'reading' && settings.readingInput === 'kana'
-                ? kanaInput(value)
-                : value,
-            )
-          }
+          onChangeText={(value) => {
+            if (prompt !== 'reading' || settings.readingInput !== 'kana') {
+              pendingN.current = false;
+              setAnswer(value);
+              return;
+            }
+            const appended = value.startsWith(answer)
+              ? value.slice(answer.length)
+              : '';
+            // Display nn as ん, but let its second n begin the next syllable.
+            // Only a single appended keystroke continues that composition;
+            // deletion, replacement and pasted text use their literal contents.
+            const composing =
+              pendingN.current && /^[aiueoy]$/i.test(appended)
+                ? answer + 'n' + appended
+                : value;
+            pendingN.current = /^n$/i.test(appended) && /n$/i.test(answer);
+            setAnswer(kanaInput(composing));
+          }}
           onSubmitEditing={submit}
           submitBehavior="submit"
           returnKeyType="done"

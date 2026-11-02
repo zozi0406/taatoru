@@ -36,7 +36,7 @@ export function normalizeAnswer(value: string, prompt: ReviewPrompt): string {
     .toLocaleLowerCase()
     .replaceAll('-', prompt === 'reading' ? '-' : ' ')
     .replaceAll('.', '')
-    .replaceAll("'", '')
+    .replaceAll("'", prompt === 'reading' ? "'" : '')
     .replaceAll('/', '');
   return prompt === 'reading' ? normalized.replaceAll(' ', '') : normalized;
 }

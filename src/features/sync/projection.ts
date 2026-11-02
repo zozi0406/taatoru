@@ -47,7 +47,10 @@ export function projectSrsStage({
   const hasMistake =
     kind === 'review' &&
     (incorrectMeaningAnswers > 0 || incorrectReadingAnswers > 0);
-  const stageDelta = hasMistake ? -1 : 1;
+  const totalMistakes = incorrectMeaningAnswers + incorrectReadingAnswers;
+  const stageDelta = hasMistake
+    ? -Math.ceil(totalMistakes / 2) * (currentSrsStage >= 5 ? 2 : 1)
+    : 1;
   const srsStage = Math.min(
     MAX_SRS_STAGE,
     Math.max(MIN_STARTED_SRS_STAGE, currentSrsStage + stageDelta),
