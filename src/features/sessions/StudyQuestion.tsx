@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Keyboard,
   KeyboardAvoidingView,
@@ -85,6 +85,12 @@ export function StudyQuestion({
   const insets = useSafeAreaInsets();
   const input = useRef<TextInput>(null);
   const [answer, setAnswer] = useState('');
+  const [readyImageSubject, setReadyImageSubject] = useState<number | null>(null);
+  const imageReady = subject.data.characters !== null ||
+    readyImageSubject === subject.id;
+  const onImageReady = useCallback((ready: boolean) => {
+    setReadyImageSubject(ready ? subject.id : null);
+  }, [subject.id]);
   const pendingN = useRef(false);
   const [showAll, setShowAll] = useState(settings.showFullAnswer);
   const graded = feedback !== null && feedback.verdict !== 'retry';
@@ -93,7 +99,7 @@ export function StudyQuestion({
   }, [graded]);
   const submit = () => {
     if (graded) onContinue();
-    else if (answer.trim() !== '' && !busy) onSubmit(answer);
+    else if (imageReady && answer.trim() !== '' && !busy) onSubmit(answer);
   };
   const resultColor =
     feedback?.verdict === 'correct'
@@ -190,7 +196,7 @@ export function StudyQuestion({
           paddingRight: 16 + insets.right,
         }}
       >
-        <StudySubjectHero subject={subject} />
+        <StudySubjectHero subject={subject} onReadyChange={onImageReady} />
         <View
           style={{
             alignItems: 'center',
@@ -225,7 +231,7 @@ export function StudyQuestion({
           autoCapitalize="none"
           autoCorrect={false}
           spellCheck={false}
-          editable={!graded && !busy}
+          editable={!graded && !busy && imageReady}
           onChangeText={(value) => {
             if (prompt !== 'reading' || settings.readingInput !== 'kana') {
               pendingN.current = false;
@@ -392,7 +398,8 @@ export function StudyQuestion({
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={graded ? 'Continue' : 'Submit answer'}
-          disabled={busy || error !== null || (!graded && answer.trim() === '')}
+          disabled={busy || error !== null ||
+            (!graded && (!imageReady || answer.trim() === ''))}
           onPress={submit}
           style={{
             minHeight: minimumTouchTarget,
@@ -402,7 +409,8 @@ export function StudyQuestion({
             justifyContent: 'center',
             backgroundColor: theme.colors.accent,
             opacity:
-              busy || error !== null || (!graded && answer.trim() === '')
+              busy || error !== null ||
+              (!graded && (!imageReady || answer.trim() === ''))
                 ? 0.5
                 : 1,
           }}

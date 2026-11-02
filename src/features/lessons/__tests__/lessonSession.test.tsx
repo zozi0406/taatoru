@@ -1,5 +1,6 @@
-import { act, fireEvent, screen } from '@testing-library/react-native';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
 
+import { radicalImages } from '@/features/media/radicalImages';
 import { LessonAvailabilityChangedError, type LessonSessionSnapshot } from '@/features/sessions/SessionRepository';
 import { radicalFixture, kanjiFixture } from '@/fixtures/api';
 import { renderApp } from '@/test/render';
@@ -99,7 +100,11 @@ test('moves from subject presentation to quiz and completes once', async () => {
   expect(onFinish).toHaveBeenCalledTimes(1);
 });
 
-test('renders a radical image and exposes pronunciation audio', async () => {
+test('renders a locally prepared radical image with a neutral accessibility label', async () => {
+  const load = jest.spyOn(radicalImages, 'load').mockResolvedValue({
+    kind: 'svg',
+    content: '<svg viewBox="0 0 10 10"><path d="M1 1h8v8H1z"/></svg>',
+  });
   const onPlayAudio = jest.fn();
   const imageRadical = {
     ...radicalFixture,
@@ -108,8 +113,8 @@ test('renders a radical image and exposes pronunciation audio', async () => {
       characters: null,
       character_images: [
         {
-          url: 'https://example.com/radical.png',
-          content_type: 'image/png' as const,
+          url: 'https://media.example.test/lesson-square.svg',
+          content_type: 'image/svg+xml' as const,
           metadata: {},
         },
       ],
@@ -128,7 +133,8 @@ test('renders a radical image and exposes pronunciation audio', async () => {
     </ThemeProvider>,
   );
 
-  expect(screen.getByLabelText('Ground radical image')).toBeVisible();
+  await waitFor(() => expect(screen.getByLabelText('Radical image')).toBeVisible());
+  load.mockRestore();
 });
 
 test('can read forward and back before starting the quiz without completing lessons', async () => {

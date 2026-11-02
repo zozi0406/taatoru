@@ -1,39 +1,32 @@
 import { useAudioPlayer } from 'expo-audio';
 import {
-  Image,
   Pressable,
   Text,
   View,
   useWindowDimensions,
 } from 'react-native';
-import { SvgUri } from 'react-native-svg';
 import { Volume2 } from 'lucide-react-native';
 import type { ReactNode } from 'react';
 
 import type { SubjectResource } from '@/api/types';
+import { radicalImageSource } from '@/features/media/radicalImages';
 import type { SubjectStudyMaterial } from '@/features/subjects/subjectDetails';
 import type { ReviewPrompt } from '@/features/reviews/types';
 import { WaniKaniText } from '@/ui/components/WaniKaniText';
+import { RadicalImage } from '@/ui/components/RadicalImage';
 import { subjectColors } from '@/ui/theme/colors';
 import { minimumTouchTarget } from '@/ui/theme/spacing';
 import { useTheme } from '@/ui/theme/ThemeProvider';
 
 export function StudySubjectHero({
   subject,
+  onReadyChange,
 }: {
   readonly subject: SubjectResource;
+  readonly onReadyChange?: (ready: boolean) => void;
 }) {
   const compact = useWindowDimensions().height < 500;
   const colors = subjectColors[subject.object];
-  const image =
-    subject.object === 'radical'
-      ? (subject.data.character_images.find(
-          (item) => item.content_type === 'image/svg+xml',
-        ) ?? subject.data.character_images[0])
-      : undefined;
-  const meaning =
-    subject.data.meanings.find(({ primary }) => primary)?.meaning ??
-    subject.data.slug;
   return (
     <View
       style={{
@@ -61,21 +54,14 @@ export function StudySubjectHero({
         >
           {subject.data.characters}
         </Text>
-      ) : image?.content_type === 'image/svg+xml' ? (
-        <SvgUri
-          accessibilityLabel={`${meaning} radical image`}
-          uri={image.url}
-          width={compact ? 64 : 100}
-          height={compact ? 64 : 100}
-        />
-      ) : image !== undefined ? (
-        <Image
-          accessibilityLabel={`${meaning} radical image`}
-          source={{ uri: image.url }}
-          style={{ width: compact ? 64 : 100, height: compact ? 64 : 100 }}
-        />
       ) : (
-        <Text style={{ color: colors.foreground }}>{meaning} radical</Text>
+        <RadicalImage
+          key={subject.id}
+          image={radicalImageSource(subject)}
+          size={compact ? 64 : 100}
+          color={colors.foreground}
+          onReadyChange={onReadyChange}
+        />
       )}
     </View>
   );

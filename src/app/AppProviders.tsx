@@ -19,6 +19,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { getE2ERuntime, E2E_ORIGIN } from '@/test/e2e/runtime';
 import { HttpWaniKaniApi } from '@/api/HttpWaniKaniApi';
 import type { Database } from '@/db/Database';
+import { prepareRadicalImages } from '@/features/media/radicalImages';
 import { ExpoDatabase } from '@/db/ExpoDatabase';
 import { migrateDatabase } from '@/db/migrate';
 import {
@@ -122,7 +123,12 @@ export function AppProviders({ children }: PropsWithChildren) {
         const control = new SyncControlRepository(openedDatabase);
         const syncStore = createSyncStore();
         const dataListeners = new Set<() => void>();
-        const invalidate = () => { for (const listener of dataListeners) listener(); };
+        const invalidate = () => {
+          for (const listener of dataListeners) listener();
+          // Public media prepares independently; a failed asset never blocks sync
+          // or pending writes. Required study images also retry at point of use.
+          void prepareRadicalImages(openedDatabase).catch(() => {});
+        };
         let unsubscribeSync: (() => void) | undefined;
         let runtimeToken: string | null = null;
         let runtimeSyncEngine: SyncCoordinator | null = null;
