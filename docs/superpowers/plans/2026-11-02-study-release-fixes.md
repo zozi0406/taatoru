@@ -66,7 +66,7 @@
 ### Task 5: Smoke harness, final evidence and MR
 
 **Files:** `scripts/e2e/android.cjs`, runner helpers/tests, verification documentation; no product files owned by workers.
-- [ ] Diagnose development welcome-sheet startup and interrupted cleanup from captured evidence. Add failing focused tooling tests before fixing startup/cleanup.
-- [ ] Run real synthetic smoke without competing UI automation; expand to mutations/resume and focused new-feature device checks.
-- [ ] Run `npm run verify`, Expo Doctor, `npm run prebuild:check`, required native build/checks and `git diff --check`. Record output and limitations.
+- [x] Diagnose development welcome-sheet startup and interrupted cleanup from captured evidence. Add failing focused tooling tests before fixing startup/cleanup.
+- [x] Run real synthetic smoke without competing UI automation; expand to resume and focused new-feature device checks.
+- [x] Run `npm run verify`, Expo Doctor, `npm run prebuild:check`, required native build/checks and `git diff --check`. Record output and limitations.
 - [ ] Obtain independent whole-branch review, resolve important findings, verify staged scope, commit/push and create ready MR with exact base/dependency and test results.
