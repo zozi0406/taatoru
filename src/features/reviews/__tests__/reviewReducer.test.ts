@@ -98,3 +98,29 @@ function snapshot(...subjectIds: readonly number[]): ReviewSessionSnapshot {
     updatedAt: NOW,
   };
 }
+
+
+test('wrap-up retains completed subjects, mixed halves and mistakes, excluding untouched subjects', () => {
+  const initial = { ...snapshot(101, 201, 301, 401, 501), queuePosition: 1,
+    questionProgress: { answeredReadingSubjectIds: [301] },
+    incorrectMeaningBySubject: { 401: 2 } };
+  const result = reduceReview(initial, { type: 'wrap-up' }, { 201: 'kanji', 301: 'kanji', 401: 'radical' });
+  expect(result.completedItem).toBeNull();
+  expect(result.snapshot.items.map((item) => item.subjectId)).toEqual([101, 301, 401]);
+  expect(result.snapshot).toMatchObject({ wrappingUp: true, queuePosition: 1, currentPrompt: 'meaning' });
+  const next = reduceReview(result.snapshot, { type: 'correct' }, { 301: 'kanji', 401: 'radical' });
+  expect(next.completedItem?.subjectId).toBe(301);
+  expect(next.snapshot.items.map((item) => item.subjectId)).toEqual([101, 301, 401]);
+});
+
+test('wrap-up without attempts completes without recording any review', () => {
+  const result = reduceReview(snapshot(201, 301), { type: 'wrap-up' }, { 201: 'kanji', 301: 'kanji' });
+  expect(result.completedItem).toBeNull();
+  expect(result.snapshot).toMatchObject({ items: [], phase: 'complete', currentPrompt: null, queuePosition: 0, wrappingUp: true });
+});
+
+test('legacy reading prompt counts as an attempted meaning during wrap-up', () => {
+  const result = reduceReview({ ...snapshot(201, 301), currentPrompt: 'reading' }, { type: 'wrap-up' }, {201: 'kanji'});
+  expect(result.snapshot.items.map((item) => item.subjectId)).toEqual([201]);
+  expect(result.snapshot.currentPrompt).toBe('reading');
+});

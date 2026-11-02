@@ -1,5 +1,5 @@
-import { useRef, useState } from 'react';
-import { Pressable, Switch, Text, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Alert, Pressable, Switch, Text, View } from 'react-native';
 import { Card } from '@/ui/components/Card';
 import { Screen } from '@/ui/components/Screen';
 import { useTheme } from '@/ui/theme/ThemeProvider';
@@ -14,16 +14,53 @@ export function StudySettingsScreen({
   settings,
   onSave,
   onClose,
+  closeRequest = 0,
+  onDirtyChange,
 }: {
+  readonly closeRequest?: number;
+  readonly onDirtyChange?: (dirty: boolean) => void;
   readonly settings: StudySettings;
   readonly onSave: (settings: StudySettings) => Promise<void>;
   readonly onClose?: () => void;
 }) {
   const theme = useTheme();
   const [draft, setDraft] = useState(settings);
+  const [saved, setSaved] = useState(settings);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(saved);
+  const requested = useRef(closeRequest);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const working = useRef(false);
+  const requestClose = () => {
+    if (working.current || onClose === undefined) return;
+    if (!dirty) {
+      onClose();
+      return;
+    }
+    Alert.alert(
+      'Discard unsaved settings?',
+      'Your saved settings will stay unchanged.',
+      [
+        { text: 'Keep editing', style: 'cancel' },
+        { text: 'Discard', style: 'destructive', onPress: onClose },
+      ],
+    );
+  };
+  useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
+  useEffect(() => {
+    if (requested.current === closeRequest) return;
+    requested.current = closeRequest;
+    requestClose();
+  });
+  const [previousSettings, setPreviousSettings] = useState(settings);
+  if (settings !== previousSettings) {
+    setPreviousSettings(settings);
+    // A clean retained Settings tab can refresh after a study-modal save.
+    if (!dirty) {
+      setDraft(settings);
+      setSaved(settings);
+    }
+  }
   const set = <K extends keyof StudySettings>(
     key: K,
     value: StudySettings[K],
@@ -35,6 +72,7 @@ export function StudySettingsScreen({
     key:
       | 'exactMatch'
       | 'allowOverrides'
+      | 'allowSkipping'
       | 'autoAdvance'
       | 'showFullAnswer'
       | 'prioritizeCurrentLevel'
@@ -71,12 +109,12 @@ export function StudySettingsScreen({
         <Text
           style={[theme.typography.body, { color: theme.colors.textMuted }]}
         >
-          Saved on this device. Queue settings apply to your next session.
+          Saved on this device. Answer controls, disclosure and question scheduling apply when you continue in lessons and reviews. Queue order, limits and lesson selection apply to the next session.
         </Text>
       }
     >
       {onClose === undefined ? null : (
-        <StudyAction label="Back to study" onPress={onClose} disabled={busy} />
+        <StudyAction label="Back to study" onPress={requestClose} disabled={busy} />
       )}
       <Card style={{ gap: 22 }}>
         <SectionTitle label="Answers & marking" />
@@ -88,7 +126,12 @@ export function StudySettingsScreen({
         {toggle(
           'allowOverrides',
           'Allow answer overrides',
-          'Correct a typo, add a meaning synonym, or ask again later.',
+          'Correct a typo or add a meaning synonym in lessons and reviews.',
+        )}
+        {toggle(
+          'allowSkipping',
+          'Allow skipping',
+          'Ask again later resets completed answers for that subject in lessons and reviews. In reviews it also resets mistake counts. The subject moves to the end and remains available until completed.',
         )}
         {toggle(
           'exactMatch',
@@ -276,7 +319,7 @@ export function StudySettingsScreen({
           setBusy(true);
           setMessage(null);
           void onSave(draft)
-            .then(() => setMessage('Settings saved.'))
+            .then(() => { setSaved(draft); setMessage('Settings saved.'); })
             .catch(() =>
               setMessage('Unable to save settings. Please try again.'),
             )
@@ -287,7 +330,7 @@ export function StudySettingsScreen({
         }}
       />
       {onClose === undefined ? null : (
-        <StudyAction label="Back to study" onPress={onClose} disabled={busy} />
+        <StudyAction label="Back to study" onPress={requestClose} disabled={busy} />
       )}
     </Screen>
   );

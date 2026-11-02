@@ -379,3 +379,21 @@ function lessonCandidate(subjectId: number, level: number) {
     subjectType: 'kanji' as const,
   };
 }
+
+test('an empty wrapped completion resumes its results instead of launching untouched due reviews', async () => {
+  const db = await subscriptionDatabase();
+  mockDatabase = db;
+  try {
+    await new AssignmentRepository(db).replaceAssignments([reviewAssignment(kanjiFixture.id)], null);
+    const repository = new ReviewSessionRepository(db);
+    const started = await repository.startReviewSession([{ assignmentId: 1_201, subjectId: kanjiFixture.id }]);
+    const wrapped = await repository.saveReviewSession({ ...started, wrappingUp: true, phase: 'complete', items: [], currentPrompt: null });
+    let reviewRendered = false;
+    mockOnReviewRender = () => { reviewRendered = true; };
+    const rendered = await renderApp(<ThemeProvider scheme="light"><ReviewSessionRoute /></ThemeProvider>);
+    await waitFor(() => expect(reviewRendered).toBe(true));
+    await waitFor(async () => expect(await repository.loadReviewSession()).toEqual(wrapped));
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+    await rendered.unmount();
+  } finally { await db.close(); }
+});

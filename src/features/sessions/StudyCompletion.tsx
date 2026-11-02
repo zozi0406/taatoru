@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { useRef, useState } from 'react';
 import { ScrollView, Text } from 'react-native';
 import { useTheme } from '@/ui/theme/ThemeProvider';
@@ -10,7 +11,9 @@ export function StudyCompletion({
   detail,
   finishLabel,
   onFinish,
+  children,
 }: {
+  readonly children?: ReactNode;
   readonly title: string;
   readonly count: number;
   readonly detail: string;
@@ -43,6 +46,7 @@ export function StudyCompletion({
         {count > 0 ? `${count} ` : ''}
         {detail}.
       </Text>
+      {children}
       {error ? (
         <Text accessibilityRole="alert" style={{ color: theme.colors.danger }}>
           Could not finish this session. Please try again.

@@ -33,6 +33,7 @@ export default function LessonSessionRoute() {
     null,
   );
   const [settings, setSettings] = useState<StudySettings | null>(null);
+  const [closeRequest, setCloseRequest] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [materials, setMaterials] = useState<
     Readonly<Record<number, SubjectStudyMaterial>>
@@ -190,10 +191,11 @@ export default function LessonSessionRoute() {
       <Modal
         visible={settingsOpen}
         animationType="slide"
-        onRequestClose={() => setSettingsOpen(false)}
+        onRequestClose={() => setCloseRequest((value) => value + 1)}
       >
         {settingsOpen ? (
           <StudySettingsContainer
+            closeRequest={closeRequest}
             onClose={() => setSettingsOpen(false)}
             onSaved={setSettings}
           />

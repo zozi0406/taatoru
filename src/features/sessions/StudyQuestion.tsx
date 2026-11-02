@@ -44,6 +44,8 @@ export interface StudyQuestionProps {
   readonly onContinue: () => void;
   readonly onOverride: () => void;
   readonly onSkip: () => void;
+  readonly onWrapUp?: () => void;
+  readonly wrappingUp?: boolean;
   readonly onRetrySave: () => void;
   readonly onAddSynonym?: (answer: string) => void;
   readonly onReload?: () => void;
@@ -67,6 +69,8 @@ export function StudyQuestion({
   onContinue,
   onOverride,
   onSkip,
+  onWrapUp,
+  wrappingUp,
   onAddSynonym,
   onRetrySave,
   onReload,
@@ -91,7 +95,8 @@ export function StudyQuestion({
   const onImageReady = useCallback((ready: boolean) => {
     setReadyImageSubject(ready ? subject.id : null);
   }, [subject.id]);
-  const [showAll, setShowAll] = useState(settings.showFullAnswer);
+  const [revealedAll, setShowAll] = useState(false);
+  const showAll = settings.showFullAnswer || revealedAll;
   const graded = feedback !== null && feedback.verdict !== 'retry';
   useEffect(() => {
     if (graded) Keyboard.dismiss();
@@ -362,13 +367,30 @@ export function StudyQuestion({
             />
           </>
         ) : null}
-        {settings.allowOverrides ? (
-          <StudyAction
-            label="Ask again later"
-            onPress={onSkip}
-            disabled={busy || error !== null}
-          />
+        {settings.allowSkipping ? (
+          <>
+            <Text style={[theme.typography.caption, { color: theme.colors.textMuted }]}>
+              Ask again later resets this subject’s completed answers. In reviews
+              it also resets mistake counts. It remains available until completed.
+            </Text>
+            <StudyAction
+              label="Ask again later"
+              onPress={onSkip}
+              disabled={busy || error !== null}
+            />
+          </>
         ) : null}
+        {wrappingUp ? (
+          <Text style={[theme.typography.caption, { color: theme.colors.textMuted }]}>
+            Wrapping up attempted subjects. Untouched reviews remain due.
+          </Text>
+        ) : onWrapUp === undefined ? null : (
+          <StudyAction
+            label="Wrap up reviews"
+            onPress={onWrapUp}
+            disabled={busy || error !== null || graded}
+          />
+        )}
       </ScrollView>
       <View
         style={{

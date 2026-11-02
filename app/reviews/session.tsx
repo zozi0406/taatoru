@@ -39,6 +39,7 @@ export default function ReviewSessionRoute() {
   >({});
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const [closeRequest, setCloseRequest] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
   useStudyMaterialRefresh(db, subjects, setMaterials, subscribeToData);
   useEffect(() => {
@@ -54,7 +55,7 @@ export default function ReviewSessionRoute() {
               new Date(),
               preferences.questionOrder,
             );
-      if (loaded !== null && loaded.items.length === 0) {
+      if (loaded !== null && loaded.items.length === 0 && !loaded.wrappingUp) {
         await repository.clearReviewSession();
         loaded = await startReviewSession(db);
       }
@@ -170,10 +171,11 @@ export default function ReviewSessionRoute() {
       <Modal
         visible={settingsOpen}
         animationType="slide"
-        onRequestClose={() => setSettingsOpen(false)}
+        onRequestClose={() => setCloseRequest((value) => value + 1)}
       >
         {settingsOpen ? (
           <StudySettingsContainer
+            closeRequest={closeRequest}
             onClose={() => setSettingsOpen(false)}
             onSaved={setSettings}
           />

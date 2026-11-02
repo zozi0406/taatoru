@@ -4,11 +4,11 @@ import { StudySettingsContainer } from '@/features/settings/StudySettingsContain
 
 export default function SettingsScreen() {
   const [visit, setVisit] = useState(0);
-  // Native tabs retain their screens; discard a draft when returning from study.
+  // Refresh saved preferences on focus while retaining an unsaved draft.
   useFocusEffect(
     useCallback(() => {
       setVisit((value) => value + 1);
     }, []),
   );
-  return <StudySettingsContainer key={visit} />;
+  return <StudySettingsContainer refreshKey={visit} />;
 }

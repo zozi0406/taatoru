@@ -404,3 +404,65 @@ function snapshot(): ReviewSessionSnapshot {
     updatedAt: '2026-07-29T12:00:00.000Z',
   };
 }
+
+
+test('wrap-up without attempts saves completion and shows no fabricated accuracy', async () => {
+  const commit = jest.fn(async (_transition: ReviewTransition) => undefined);
+  await renderApp(<ThemeProvider scheme="light"><ReviewSessionScreen initialSnapshot={snapshot()}
+    subjects={[radicalFixture]} onCommitTransition={commit} onExit={jest.fn()} onFinish={async () => {}} /></ThemeProvider>);
+  await fireEvent.press(screen.getByRole('button', { name: 'Wrap up reviews' }));
+  expect(screen.getByText('Reviews complete')).toBeVisible();
+  expect(screen.getByText('No reviews completed. Untouched reviews remain due.')).toBeVisible();
+  expect(commit).toHaveBeenCalledWith(expect.objectContaining({ completedItem: null, snapshot: expect.objectContaining({items: [], wrappingUp: true}) }));
+});
+
+test('completed-subject accuracy counts missed subjects once and links to their details', async () => {
+  const open = jest.fn();
+  const subjects = Array.from({length: 4}, (_, i) => ({ ...radicalFixture, id: 101 + i }));
+  await renderApp(<ThemeProvider scheme="light"><ReviewSessionScreen initialSnapshot={{ ...snapshot(),
+    phase: 'complete', queuePosition: 4, currentPrompt: null,
+    items: subjects.map(({id}) => ({assignmentId: id + 400, subjectId: id})),
+    incorrectMeaningBySubject: {101: 3}, incorrectReadingBySubject: {101: 1} }}
+    subjects={subjects} onOpenSubject={open} onCommitTransition={async () => {}} onExit={jest.fn()} onFinish={async () => {}} /></ThemeProvider>);
+  expect(screen.getByText('75% accuracy · 3 of 4 subjects correct')).toBeVisible();
+  await fireEvent.press(screen.getByRole('button', { name: 'Review missed subject: Ground' }));
+  expect(open).toHaveBeenCalledWith(101);
+});
+
+test('skipping is independent from answer overrides', async () => {
+  await renderApp(<ThemeProvider scheme="light"><ReviewSessionScreen initialSnapshot={snapshot()}
+    settings={{ ...DEFAULT_STUDY_SETTINGS, allowOverrides: false, allowSkipping: true }}
+    subjects={[radicalFixture]} onCommitTransition={async () => {}} onExit={jest.fn()} onFinish={async () => {}} /></ThemeProvider>);
+  expect(screen.getByRole('button', {name: 'Ask again later'})).toBeVisible();
+  expect(screen.getByText(/resets this subject/)).toBeVisible();
+});
+
+test('wrap-up cannot overtake an in-flight answer save', async () => {
+  let release!: () => void;
+  const commit = jest.fn(() => new Promise<void>((resolve) => { release = resolve; }));
+  await renderApp(<ThemeProvider scheme="light"><ReviewSessionScreen initialSnapshot={snapshot()}
+    subjects={[radicalFixture]} onCommitTransition={commit} onExit={jest.fn()} onFinish={async () => {}} /></ThemeProvider>);
+  await submit('sky');
+  expect(screen.getByRole('button', {name: 'Wrap up reviews'})).toBeDisabled();
+  await fireEvent.press(screen.getByRole('button', {name: 'Wrap up reviews'}));
+  expect(commit).toHaveBeenCalledTimes(1);
+  await act(async () => { release(); });
+  expect(screen.getByText('Incorrect')).toBeVisible();
+});
+
+test('saving disclosure settings updates revealed information without losing its answer draft', async () => {
+  const initial = { ...snapshot(), currentPrompt: 'reading' as const, questionProgress: {},
+    items: [{ assignmentId: 501, subjectId: kanjiFixture.id }] };
+  const view = (showFullAnswer: boolean) => <ThemeProvider scheme="light"><ReviewSessionScreen
+    initialSnapshot={initial} subjects={[kanjiFixture]} settings={{...DEFAULT_STUDY_SETTINGS, autoAdvance: false, showFullAnswer}}
+    onCommitTransition={async () => {}} onExit={jest.fn()} onFinish={async () => {}} /></ThemeProvider>;
+  const rendered = await renderApp(view(false));
+  await fireEvent.changeText(screen.getByLabelText('Reading answer'), 'ichi');
+  await fireEvent.press(screen.getByRole('button', { name: 'Submit answer' }));
+  expect(screen.queryByText('One line is one.')).toBeNull();
+  await rendered.rerender(view(true));
+  expect(screen.getByText('One line is one.')).toBeVisible();
+  expect(screen.getByLabelText('Reading answer')).toHaveProp('value', 'いち');
+  await rendered.rerender(view(false));
+  expect(screen.queryByText('One line is one.')).toBeNull();
+});

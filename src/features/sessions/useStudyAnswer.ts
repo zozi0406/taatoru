@@ -88,6 +88,7 @@ export function useStudyAnswer({
     }, result.verdict === 'correct');
   };
   return {
+    perform,
     guard: (action: () => void) => { if (!working.current) action(); },
     feedback,
     busy,
@@ -107,7 +108,7 @@ export function useStudyAnswer({
         void perform(() => apply('override-correct'));
     },
     skip: () => {
-      if (settings.allowOverrides) void perform(() => apply('skip'));
+      if (settings.allowSkipping) void perform(() => apply('skip'));
     },
     retrySave: () => {
       void lastAction.current?.();
