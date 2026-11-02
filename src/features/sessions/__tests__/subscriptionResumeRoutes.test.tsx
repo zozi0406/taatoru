@@ -1,4 +1,4 @@
-import { act, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
 
 import LessonSessionRoute from '../../../../app/lessons/session';
 import ReviewSessionRoute from '../../../../app/reviews/session';
@@ -103,6 +103,24 @@ test('discards an inaccessible resumed lesson session and returns to the picker'
   } finally {
     await db.close();
   }
+});
+
+test('a restore failure offers retry and home without discarding the saved session', async () => {
+  const db = await subscriptionDatabase();
+  mockDatabase = db;
+  try {
+    await new AssignmentRepository(db).replaceAssignments([{ ...reviewAssignment(kanjiFixture.id), data: { ...reviewAssignment(kanjiFixture.id).data, srs_stage: 0, started_at: null } }], null);
+    const repository = new SessionRepository(db);
+    const saved = await repository.startLessonSession([lessonCandidate(kanjiFixture.id, 1)]);
+    const failure = jest.spyOn(SessionRepository.prototype, 'loadLessonSession').mockRejectedValueOnce(new Error('read unavailable'));
+    await renderApp(<ThemeProvider scheme="light"><LessonSessionRoute /></ThemeProvider>);
+    await screen.findByText('Unable to restore this lesson session.');
+    expect(screen.getByRole('button', { name: 'Return home' })).toBeVisible();
+    await fireEvent.press(screen.getByRole('button', { name: 'Retry restore' }));
+    await waitFor(() => expect(screen.queryByText('Unable to restore this lesson session.')).toBeNull());
+    expect(await repository.loadLessonSession()).toEqual(saved);
+    failure.mockRestore();
+  } finally { await db.close(); }
 });
 
 test('replaces an inaccessible resumed review session with eligible reviews', async () => {
@@ -314,6 +332,10 @@ async function subscriptionDatabase(): Promise<NodeTestDatabase> {
     ],
     null,
   );
+  await new AssignmentRepository(db).replaceAssignments([kanjiFixture.id, 402].map((subjectId) => ({
+    ...reviewAssignment(subjectId),
+    data: { ...reviewAssignment(subjectId).data, srs_stage: 0, started_at: null },
+  })), null);
   return db;
 }
 

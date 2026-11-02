@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
+import { Text, View } from 'react-native';
+import { StudyAction } from '@/features/sessions/StudySubjectInformation';
+import { useTheme } from '@/ui/theme/ThemeProvider';
 import type { SubjectResource } from '@/api/types';
-import type { LessonSessionSnapshot } from '@/features/sessions/SessionRepository';
+import {
+  LessonAvailabilityChangedError,
+  type LessonSessionSnapshot,
+} from '@/features/sessions/SessionRepository';
 import {
   DEFAULT_STUDY_SETTINGS,
   type StudySettings,
@@ -17,6 +23,7 @@ interface LessonSessionScreenProps {
   readonly initialSnapshot: LessonSessionSnapshot;
   readonly onCommitTransition: (transition: LessonTransition) => Promise<void>;
   readonly onExit: () => void;
+  readonly onReload?: () => void;
   readonly onFinish: () => Promise<void>;
   readonly onPlayAudio?: (url: string) => void;
   readonly subjects: readonly SubjectResource[];
@@ -31,6 +38,7 @@ export function LessonSessionScreen({
   initialSnapshot,
   onCommitTransition,
   onExit,
+  onReload,
   onFinish,
   onPlayAudio,
   subjects,
@@ -40,6 +48,8 @@ export function LessonSessionScreen({
   onSettings,
   onOpenSubject,
 }: LessonSessionScreenProps) {
+  const theme = useTheme();
+  const [availabilityError, setAvailabilityError] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const presenting = useRef(false);
   const mounted = useRef(true);
@@ -54,7 +64,14 @@ export function LessonSessionScreen({
   );
   const apply = async (type: Parameters<typeof reduceLesson>[1]['type']) => {
     const result = reduceLesson(snapshot, { type }, types, settings);
-    await onCommitTransition(result);
+    try {
+      await onCommitTransition(result);
+    } catch (failure) {
+      if (failure instanceof LessonAvailabilityChangedError && mounted.current) {
+        setAvailabilityError(failure.message);
+      }
+      throw failure;
+    }
     if (!mounted.current) return;
     setSnapshot(result.snapshot);
     const current = subjects.find(
@@ -93,6 +110,23 @@ export function LessonSessionScreen({
       setPresentationBusy(false);
     }
   };
+  if (availabilityError !== null) return (
+    <View style={{
+      flex: 1,
+      justifyContent: 'center',
+      padding: theme.spacing.xl,
+      gap: theme.spacing.md,
+      backgroundColor: theme.colors.canvas,
+    }}>
+      <Text accessibilityRole="alert" style={{ color: theme.colors.danger }}>
+        {availabilityError}
+      </Text>
+      {onReload === undefined ? null : (
+        <StudyAction label="Reload lessons" onPress={onReload} />
+      )}
+      <StudyAction label="Return home" onPress={onExit} />
+    </View>
+  );
   if (snapshot.phase === 'complete')
     return (
       <StudyCompletion

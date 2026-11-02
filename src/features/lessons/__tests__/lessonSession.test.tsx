@@ -1,6 +1,6 @@
 import { act, fireEvent, screen } from '@testing-library/react-native';
 
-import type { LessonSessionSnapshot } from '@/features/sessions/SessionRepository';
+import { LessonAvailabilityChangedError, type LessonSessionSnapshot } from '@/features/sessions/SessionRepository';
 import { radicalFixture, kanjiFixture } from '@/fixtures/api';
 import { renderApp } from '@/test/render';
 import { ThemeProvider } from '@/ui/theme/ThemeProvider';
@@ -203,3 +203,19 @@ function snapshot(): LessonSessionSnapshot {
     updatedAt: '2026-07-29T12:00:00.000Z',
   };
 }
+
+test('a stale lesson save offers safe reload and home instead of retrying a stale completion', async () => {
+  const onReload = jest.fn();
+  const onExit = jest.fn();
+  await renderApp(<ThemeProvider scheme="light"><LessonSessionScreen
+    initialSnapshot={snapshot()}
+    onCommitTransition={async () => { throw new LessonAvailabilityChangedError(); }}
+    onReload={onReload} onExit={onExit} onFinish={async () => undefined} subjects={[radicalFixture]}
+  /></ThemeProvider>);
+  await fireEvent.press(screen.getByRole('button', { name: 'Continue to quiz' }));
+  await screen.findByText('Lesson availability changed. Reload lessons to continue.');
+  await fireEvent.press(screen.getByRole('button', { name: 'Reload lessons' }));
+  expect(onReload).toHaveBeenCalledTimes(1);
+  await fireEvent.press(screen.getByRole('button', { name: 'Return home' }));
+  expect(onExit).toHaveBeenCalledTimes(1);
+});

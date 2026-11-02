@@ -108,15 +108,7 @@ export class AssignmentRepository {
     _now: Date,
   ): Promise<readonly AvailableAssignment[]> {
     return this.db.all<AvailableAssignment>(
-      `${BASE_ASSIGNMENT_QUERY}
-       WHERE a.srs_stage = 0
-         AND a.unlocked_at IS NOT NULL
-         AND a.started_at IS NULL
-         AND a.hidden = 0
-         AND s.hidden_at IS NULL
-         AND ${SUBJECT_WITHIN_GRANTED_LEVEL}
-         AND ${NOT_EXCLUDED}
-       ORDER BY s.level, s.lesson_position, s.id`,
+      AVAILABLE_LESSONS_QUERY,
     );
   }
 }
@@ -135,3 +127,14 @@ export const NOT_EXCLUDED = `NOT EXISTS (
   WHERE sm.subject_id = a.subject_id
     AND instr(COALESCE(sm.meaning_note, ''), '#tsurukameExclude') > 0
 ) AND ${NO_ACTIVE_PENDING_PROGRESS}`;
+
+/** Shared by session transactions so eligibility cannot drift from the picker. */
+export const AVAILABLE_LESSONS_QUERY = `${BASE_ASSIGNMENT_QUERY}
+       WHERE a.srs_stage = 0
+         AND a.unlocked_at IS NOT NULL
+         AND a.started_at IS NULL
+         AND a.hidden = 0
+         AND s.hidden_at IS NULL
+         AND ${SUBJECT_WITHIN_GRANTED_LEVEL}
+         AND ${NOT_EXCLUDED}
+       ORDER BY s.level, s.lesson_position, s.id`;
