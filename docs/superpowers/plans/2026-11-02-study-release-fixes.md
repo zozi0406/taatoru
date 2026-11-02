@@ -69,4 +69,6 @@
 - [x] Diagnose development welcome-sheet startup and interrupted cleanup from captured evidence. Add failing focused tooling tests before fixing startup/cleanup.
 - [x] Run real synthetic smoke without competing UI automation; expand to resume and focused new-feature device checks.
 - [x] Run `npm run verify`, Expo Doctor, `npm run prebuild:check`, required native build/checks and `git diff --check`. Record output and limitations.
-- [ ] Obtain independent whole-branch review, resolve important findings, verify staged scope, commit/push and create ready MR with exact base/dependency and test results.
+- [x] Obtain independent whole-branch review, resolve important findings, verify staged scope, commit/push and create ready MR with exact base/dependency and test results.
+
+Ready MR: [#7](https://github.com/zozi0406/taatoru/pull/7), stacked on PR #6. See [verification evidence](../../verification/study-release-fixes.md).
