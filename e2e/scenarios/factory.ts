@@ -77,7 +77,7 @@ export function prerequisites(subject: SubjectResource): readonly number[] {
 }
 
 export function createScenario(name: ScenarioName = 'daily', seed = 42, now = new Date()): Scenario {
-  const preset = PRESETS[name];
+  const preset = Object.hasOwn(PRESETS, name) ? PRESETS[name] : undefined;
   if (!preset || !Number.isFinite(now.getTime())) throw new Error('Unknown scenario or invalid reference time');
   const timestamp = new Date(now.getTime() - 86_400_000).toISOString();
   const subjects = createCatalog(Math.min(60, preset.level + 2), seed, timestamp);

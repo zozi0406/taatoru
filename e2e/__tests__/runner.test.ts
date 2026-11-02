@@ -53,3 +53,8 @@ test('retry timestamps are stable per review, not shared across different comple
   expect(() => assertRetryTimestamps([attempt(1, 'first'), attempt(2, 'later'), attempt(1, 'first')])).not.toThrow();
   expect(() => assertRetryTimestamps([attempt(1, 'first'), attempt(1, 'changed')])).toThrow('timestamp');
 });
+
+
+test.each(['constructor', 'toString', '__proto__'])('rejects inherited object property %s as a scenario before device setup', scenario => {
+  expect(() => parseRunnerArgs(['--scenario', scenario])).toThrow('Unknown scenario');
+});

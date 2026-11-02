@@ -77,3 +77,41 @@ test('preserves synthetic Unicode notes when a UTF-8 character spans request chu
   });
   expect(server.world.scenario.studyMaterials[0]?.data.meaning_note).toBe(note);
 });
+
+test('localizes API links without rewriting authored notes and synonyms', async () => {
+  const note = 'Synthetic hint: http://127.0.0.1:8787/v2/reviews is literal note text';
+  const synonym = 'invented http://127.0.0.1:8787 marker';
+  const subjectId = server.world.dueReviews()[0]!.data.subject_id;
+  const receipt = await api().upsertStudyMaterial({ subjectId, meaningNote: note,
+    readingNote: note, meaningSynonyms: [synonym] });
+  expect(receipt.url).toBe(`${server.origin}/v2/study_materials/${receipt.id}`);
+  expect(receipt.data.meaning_note).toBe(note);
+  expect(receipt.data.reading_note).toBe(note);
+  expect(receipt.data.meaning_synonyms).toEqual([synonym]);
+  expect((await api().findStudyMaterial(subjectId))?.data.meaning_note).toBe(note);
+  const bootstrap = await (await networkFetch(`${server.origin}/__e2e/bootstrap`)).json();
+  expect(bootstrap.resources.studyMaterials.data[0].data.meaning_note).toBe(note);
+  const subject = bootstrap.resources.subjects.data[0];
+  expect(subject.url).toBe(`${server.origin}/v2/subjects/${subject.id}`);
+  expect(bootstrap.resources.user.data.profile_url).toBe(`${server.origin}/synthetic`);
+});
+
+test.each([{ scenario: 'daily', seed: -1 }, { scenario: 'constructor' }, { scenario: 'toString' }])('invalid reset %j preserves account, journal, armed faults and held responses', async payload => {
+  const lesson = server.world.availableLessons()[0]!;
+  const runId = server.world.scenario.runId;
+  server.arm({ method: 'PUT', path: `/v2/assignments/${lesson.id}/start`, kind: 'hold-after' });
+  const writing = api().startAssignment({ assignmentId: lesson.id });
+  await server.waitForHeld();
+  server.arm({ method: 'GET', path: `/v2/assignments/${lesson.id}`, kind: 'reject', status: 500 });
+  try {
+    const reset = await networkFetch(`${server.origin}/__e2e/reset`, { method: 'POST',
+      body: JSON.stringify(payload) });
+    expect(reset.status).toBe(422);
+    expect(server.world.scenario.runId).toBe(runId);
+    expect(server.world.assignment(lesson.id).data.started_at).not.toBeNull();
+    expect(server.journal).toHaveLength(1);
+    const state = await (await networkFetch(`${server.origin}/__e2e/state`)).json();
+    expect(state.held).toBe(1);
+    await expect(api().getAssignment(lesson.id)).rejects.toMatchObject({ status: 500 });
+  } finally { server.release(); await writing; }
+});

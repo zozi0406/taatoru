@@ -131,3 +131,8 @@ test('empty is a completed final-level account with no active or future workload
   expect(world.scenario.user.data.level).toBe(60);
   expect(world.scenario.assignments.filter(a => a.data.available_at !== null)).toEqual([]);
 });
+
+
+test('scenario factory rejects inherited property names as unknown scenarios', () => {
+  expect(() => createScenario('constructor' as Parameters<typeof createScenario>[0])).toThrow('Unknown scenario');
+});

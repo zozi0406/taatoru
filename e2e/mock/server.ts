@@ -12,6 +12,9 @@ export interface JournalEntry {
 }
 interface Options { scenario?: ScenarioName; seed?: number; port?: number; pageSize?: number }
 
+const FIXTURE_ORIGIN = 'http://127.0.0.1:8787';
+const LINK_FIELDS = new Set(['url', 'document_url', 'profile_url', 'next_url', 'previous_url']);
+
 async function bodyOf(request: IncomingMessage): Promise<Record<string, unknown>> {
   let text = '';
   request.setEncoding('utf8');
@@ -48,7 +51,9 @@ export async function startMockServer(options: Options = {}) {
       if (res.destroyed) return;
       res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       // Resource URLs are local even when tests request an ephemeral port.
-      res.end(JSON.stringify(value).replaceAll('http://127.0.0.1:8787', origin));
+      res.end(JSON.stringify(value, (key, field: unknown) =>
+        LINK_FIELDS.has(key) && typeof field === 'string' && field.startsWith(`${FIXTURE_ORIGIN}/`)
+          ? origin + field.slice(FIXTURE_ORIGIN.length) : field));
     };
     let entry: JournalEntry | undefined;
     try {
@@ -62,11 +67,14 @@ export async function startMockServer(options: Options = {}) {
         });
         if (method === 'GET' && url.pathname === '/__e2e/state') return send(200, { scenario: world.scenario, journal, held: held.size });
         if (method === 'POST' && url.pathname === '/__e2e/reset') {
-          if (typeof body.scenario !== 'string' || !(body.scenario in PRESETS)) throw new MockValidationError('Unknown scenario');
+          if (typeof body.scenario !== 'string' || !Object.hasOwn(PRESETS, body.scenario)) throw new MockValidationError('Unknown scenario');
+          // Build and validate first: rejected control input must not disturb an active run.
+          const replacement = new MockWorld(createScenario(body.scenario as ScenarioName,
+            body.seed === undefined ? 42 : integer(body.seed)), Date.now);
+          replacement.scenario.runId += `-${randomUUID()}`;
           for (const release of held) release();
           held.clear(); faults.length = 0; journal.length = 0;
-          world = new MockWorld(createScenario(body.scenario as ScenarioName, body.seed === undefined ? 42 : integer(body.seed)), Date.now);
-          world.scenario.runId += `-${randomUUID()}`;
+          world = replacement;
           return send(200, { runId: world.scenario.runId });
         }
         if (method === 'POST' && url.pathname === '/__e2e/fault') {

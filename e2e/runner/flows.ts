@@ -14,7 +14,7 @@ export function parseRunnerArgs(args: readonly string[]) {
   const suite = options['--suite'] ?? 'smoke';
   if (!SUITES.includes(suite as Suite)) throw new Error('Unknown suite');
   const scenario = options['--scenario'] ?? (['progression', 'resume', 'recovery', 'preacceptance', 'quota', 'rejected', 'receipt-recovery', 'level-up-auto', 'connection-before'].includes(suite) ? 'level-up' : suite === 'bounds' ? 'extreme' : suite === 'sandbox' ? 'daily' : 'smoke');
-  if (!(scenario in PRESETS)) throw new Error('Unknown scenario');
+  if (!Object.hasOwn(PRESETS, scenario)) throw new Error('Unknown scenario');
   const seed = Number(options['--seed'] ?? 42);
   if (!Number.isSafeInteger(seed)) throw new Error('Invalid seed');
   return { suite: suite as Suite, scenario: scenario as ScenarioName, seed, serial: options['--serial'], apk: options['--apk'], maestro: options['--maestro'] };
