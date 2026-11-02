@@ -26,6 +26,12 @@ describe.each([
     ['sempai', ['s', 'せ', 'せm', 'せんp', 'せんぱ', 'せんぱい']],
     ['na', ['n', 'な']],
     ['nn', ['n', 'ん']],
+    ['annai', ['あ', 'あn', 'あん', 'あんあ', 'あんあい']],
+    [
+      'konnichiha',
+      ['k', 'こ', 'こn', 'こん', 'こんい', 'こんいc', 'こんいch', 'こんいち', 'こんいちh', 'こんいちは'],
+    ],
+    ['shinnyuu', ['s', 'sh', 'し', 'しn', 'しん', 'しんy', 'しんゆ', 'しんゆう']],
   ] as const)('converts %s as each character is entered', async (romaji, values) => {
     const submit = jest.fn();
     await renderApp(
@@ -60,4 +66,43 @@ describe.each([
     await fireEvent.press(screen.getByRole('button', { name: 'Submit answer' }));
     expect(submit).toHaveBeenCalledWith(values[values.length - 1]);
   });
+  test.each([
+    [['n', 'nn', '', 'a'], 'あ'],
+    [['n', 'nn', 'んa'], 'んあ'],
+    [['n', 'nn', 'んai'], 'んあい'],
+    [['nn', 'んa'], 'んあ'],
+    [['n', 'nn', 'aん', 'あんa'], 'あんあ'],
+    [['n', 'nn', 'aん'], 'あん'],
+    [['annai'], 'あんない'],
+    [["shin'you"], 'しんよう'],
+    [['n', 'nn', 'んか', 'んかa'], 'んかあ'],
+  ] as const)(
+    'respects deletion, replacement and pasted text: %j',
+    async (edits, expected) => {
+      await renderApp(
+        <ThemeProvider scheme="light">
+          <Prompt
+            feedback={null}
+            index={0}
+            total={1}
+            subject={kanjiFixture}
+            prompt="reading"
+            settings={DEFAULT_STUDY_SETTINGS}
+            busy={false}
+            error={null}
+            onExit={jest.fn()}
+            onSubmit={jest.fn()}
+            onContinue={jest.fn()}
+            onOverride={jest.fn()}
+            onSkip={jest.fn()}
+            onRetrySave={jest.fn()}
+          />
+        </ThemeProvider>,
+      );
+      for (const value of edits) {
+        await fireEvent.changeText(screen.getByLabelText('Reading answer'), value);
+      }
+      expect(screen.getByLabelText('Reading answer')).toHaveDisplayValue(expected);
+    },
+  );
 });

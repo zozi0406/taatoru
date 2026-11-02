@@ -2,8 +2,24 @@ import type { Scenario, ScenarioName } from '../scenarios/factory';
 import { PRESETS } from '../scenarios/factory';
 
 export type Command = Record<string, unknown>;
-export const SUITES = ['smoke', 'mutations', 'progression', 'bounds', 'recovery', 'resume', 'materials', 'preacceptance', 'quota', 'rejected', 'sandbox', 'receipt-recovery', 'level-up-auto', 'connection-before', 'material-recovery'] as const;
+export const SUITES = ['smoke', 'mutations', 'progression', 'bounds', 'recovery', 'resume', 'materials', 'preacceptance', 'quota', 'rejected', 'sandbox', 'receipt-recovery', 'level-up-auto', 'connection-before', 'material-recovery', 'reading-input', 'wrap-up', 'media-cache'] as const;
 export type Suite = typeof SUITES[number];
+
+/** Expo launcher flags affect development chrome only; application routes stay real. */
+export function developmentClientLaunchUrl(): string {
+  const launch = new URL('taatoru-e2e://expo-development-client/');
+  launch.searchParams.set('url', 'http://127.0.0.1:8091');
+  launch.searchParams.set('disableOnboarding', '1');
+  launch.searchParams.set('disableFab', '1');
+  launch.searchParams.set('disableAutoLaunch', '1');
+  return launch.toString();
+}
+
+/** adb shell joins arguments; quote the fixed URL so query separators stay literal. */
+export function developmentClientLaunchCommand(): string {
+  return `am start -a android.intent.action.VIEW -d '${developmentClientLaunchUrl()}' app.taatoru.e2e`;
+}
+
 export function parseRunnerArgs(args: readonly string[]) {
   const options: Record<string, string> = {};
   for (let index = 0; index < args.length; index += 2) {
@@ -26,6 +42,10 @@ export function selectDevice(output: string, requested?: string): string {
   throw new Error('Specify --serial for one connected, authorized Android device');
 }
 export function waitFor(id: string): Command { return { extendedWaitUntil: { visible: { id }, timeout: 120000 } }; }
+/** The container appears before the asynchronous local dashboard data is ready. */
+export function homeReadyCommands(): Command[] {
+  return [waitFor('home-dashboard'), { extendedWaitUntil: { visible: 'Start reviews', timeout: 120000 } }];
+}
 export function tap(text: string): Command { return { tapOn: text }; }
 export function answerCommands(scenario: Scenario, id: number, prompt: 'meaning' | 'reading', wrong = false, overrideWrong = true): Command[] {
   const answer = scenario.answers[id]!;
@@ -42,7 +62,34 @@ export function reviewCommands(scenario: Scenario, ids: readonly number[], overr
 export function lessonCommands(scenario: Scenario, id: number, traversalTimeout = 30000): Command[] {
   return [tap('Choose lessons'), { scrollUntilVisible: { element: { id: `lesson-subject-${id}` }, direction: 'DOWN', timeout: traversalTimeout, speed: traversalTimeout > 30000 ? 80 : 40, waitToSettleTimeoutMs: 500 } },
     { tapOn: { id: `lesson-subject-${id}` } }, tap('Begin selected lessons'), tap('Continue to quiz'),
-    ...reviewCommands(scenario, [id]), tap('Finish lessons'), waitFor('home-dashboard')];
+    ...reviewCommands(scenario, [id]), tap('Finish lessons'), ...homeReadyCommands()];
+}
+
+/** Complete a real mistake and leave the final subject's reading half for wrap-up. */
+export function wrapUpCommands(scenario: Scenario, ids: readonly number[]): Command[] {
+  const last = ids.at(-1);
+  if (ids.length !== 4 || last === undefined || !scenario.answers[last]?.reading)
+    throw new Error('Wrap-up workload requires four subjects ending in a two-part review');
+  return [tap('Start reviews'), ...answerCommands(scenario, ids[0]!, 'meaning', true, false),
+    ...reviewCommands(scenario, ids.slice(0, -1)), ...answerCommands(scenario, last, 'meaning'),
+    tap('Wrap up reviews'), ...answerCommands(scenario, last, 'reading'),
+    { assertVisible: 'Reviews complete' }, { assertVisible: '.*75%.*' },
+    { assertVisible: scenario.answers[ids[0]!]!.meaning }, tap('Finish reviews'), ...homeReadyCommands()];
+}
+
+/** Exercise incremental composition through real native text changes before the valid grade. */
+export function readingInputCommands(scenario: Scenario, id: number): Command[] {
+  if (!scenario.answers[id]?.reading) throw new Error('Reading input workload requires a reading');
+  const scrollTo = (text: string): Command => ({ scrollUntilVisible: { element: { text }, direction: 'DOWN', timeout: 30000 } });
+  return [tap('Choose lessons'), scrollTo(scenario.answers[id]!.meaning),
+    { tapOn: { id: `lesson-subject-${id}` } }, tap('Begin selected lessons'),
+    tap('Study settings'), scrollTo('Reading input: Convert to kana'), tap('Reading input: Convert to kana'),
+    scrollTo('Save settings'), tap('Save settings'), scrollTo('Back to study'), tap('Back to study'), tap('Continue to quiz'),
+    ...answerCommands(scenario, id, 'meaning'), waitFor(`study-answer-${id}-reading`),
+    { tapOn: { id: `study-answer-${id}-reading` } },
+    ...[...'annai'].map(character => ({ inputText: character })), { assertVisible: 'あんあい' }, { eraseText: {} },
+    ...[...'konnichiha'].map(character => ({ inputText: character })), { assertVisible: 'こんいちは' }, { eraseText: {} },
+    ...answerCommands(scenario, id, 'reading'), tap('Finish lessons'), ...homeReadyCommands()];
 }
 
 export function assertReviewJournal(
@@ -62,7 +109,7 @@ export function assertReviewJournal(
 
 export function cancelLessonCommands(id: number): Command[] {
   return [tap('Choose lessons'), { scrollUntilVisible: { element: { id: `lesson-subject-${id}` }, direction: 'DOWN', timeout: 30000 } },
-    { tapOn: { id: `lesson-subject-${id}` } }, { assertVisible: '1 of 1 selected' }, tap('Cancel lesson selection'), waitFor('home-dashboard')];
+    { tapOn: { id: `lesson-subject-${id}` } }, { assertVisible: '1 of 1 selected' }, tap('Cancel lesson selection'), ...homeReadyCommands()];
 }
 
 /** A retry must retain its own completion time; distinct reviews need not share one. */

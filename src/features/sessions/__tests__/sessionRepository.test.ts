@@ -142,14 +142,8 @@ test('limits resumed lesson subjects to max_level_granted', async () => {
 });
 
 test('rolls back lesson completion when saving the next session snapshot fails', async () => {
-  const db = await NodeTestDatabase.open();
-  await migrateDatabase(db);
+  const db = await lessonDatabase();
   try {
-    await new SubjectRepository(db).replaceSubjects([kanjiFixture], null);
-    await new AssignmentRepository(db).replaceAssignments(
-      [assignmentFixture],
-      null,
-    );
     const repository = new SessionRepository(db);
     const previous = await repository.startLessonSession(
       [candidate(kanjiFixture.id, assignmentFixture.id)],
@@ -193,6 +187,106 @@ test('rolls back lesson completion when saving the next session snapshot fails',
     await db.close();
   }
 });
+
+test.each([
+  ['remote start', "UPDATE assignments SET srs_stage = 1, started_at = '2026-07-29'"],
+  ['locked', 'UPDATE assignments SET unlocked_at = NULL'],
+  ['hidden assignment', 'UPDATE assignments SET hidden = 1'],
+  ['hidden subject', "UPDATE subjects SET hidden_at = '2026-07-29'"],
+  ['subscription loss', 'UPDATE subjects SET level = 61'],
+  ['account reset', 'DELETE FROM assignments'],
+])('rejects a stale lesson completion after %s without queuing a write', async (_, mutation) => {
+  const db = await lessonDatabase();
+  try {
+    const repository = new SessionRepository(db);
+    const previous = await repository.startLessonSession([candidate(kanjiFixture.id, assignmentFixture.id)], NOW);
+    await db.run(mutation);
+    await expect(repository.commitLessonTransition(previous.items[0]!, {
+      ...previous, phase: 'complete',
+    }, NOW)).rejects.toThrow('Lesson availability changed');
+    expect(await db.first('SELECT COUNT(*) AS count FROM pending_progress')).toEqual({ count: 0 });
+    expect(await repository.loadLessonSession()).toEqual(previous);
+    expect((await repository.revalidateLessonSession(previous, NOW)).items).toEqual([]);
+  } finally { await db.close(); }
+});
+
+test('refuses an excluded lesson at completion and removes it on resume', async () => {
+  const db = await lessonDatabase();
+  try {
+    const repository = new SessionRepository(db);
+    const previous = await repository.startLessonSession([candidate(kanjiFixture.id, assignmentFixture.id)], NOW);
+    await db.run(`INSERT INTO study_materials (id, subject_id, subject_type, meaning_note, reading_note, meaning_synonyms_json, hidden, data_updated_at, resource_json)
+      VALUES (9001, ?, 'kanji', '#tsurukameExclude', NULL, '[]', 0, ?, '{}')`, [kanjiFixture.id, NOW.toISOString()]);
+    await expect(repository.commitLessonTransition(previous.items[0]!, { ...previous, phase: 'complete' }, NOW)).rejects.toThrow('Lesson availability changed');
+    expect((await repository.revalidateLessonSession(previous, NOW)).items).toEqual([]);
+  } finally { await db.close(); }
+});
+
+test('replaces assignment IDs and resets only the affected attempt while preserving committed and eligible progress', async () => {
+  const db = await lessonDatabase();
+  try {
+    await seedSubject(db, 2, 'Second');
+    await seedSubject(db, 3, 'Third');
+    await db.run(`INSERT INTO assignments (id, subject_id, subject_type, srs_stage, unlocked_at, hidden, data_updated_at, resource_json)
+      VALUES (1002, 2, 'kanji', 0, ?, 0, ?, '{}'), (1003, 3, 'kanji', 0, ?, 0, ?, '{}')`, [NOW.toISOString(), NOW.toISOString(), NOW.toISOString(), NOW.toISOString()]);
+    const repository = new SessionRepository(db);
+    const previous = await repository.startLessonSession([candidate(kanjiFixture.id, assignmentFixture.id), candidate(2), candidate(3)], NOW);
+    const quiz = { ...previous, phase: 'quiz' as const, queuePosition: 1, quizState: {
+      ...previous.quizState, completedSubjectIds: [kanjiFixture.id], currentSubjectId: 2,
+      currentPrompt: 'reading' as const, questionProgress: { answeredMeaningSubjectIds: [2, 3] },
+      incorrectMeaningBySubject: { 2: 2, 3: 1 },
+    } };
+    await repository.commitLessonTransition(previous.items[0]!, quiz, NOW);
+    await db.run('UPDATE assignments SET id = 2002 WHERE subject_id = 2');
+    const restored = await repository.revalidateLessonSession(quiz, NOW);
+    expect(restored.items).toEqual([previous.items[0], { assignmentId: 2002, subjectId: 2 }, previous.items[2]]);
+    expect(await db.first('SELECT COUNT(*) AS count FROM pending_progress')).toEqual({ count: 1 });
+    expect(restored.quizState).toMatchObject({ completedSubjectIds: [kanjiFixture.id], currentSubjectId: 2, currentPrompt: 'meaning', questionProgress: { answeredMeaningSubjectIds: [3] }, incorrectMeaningBySubject: { 3: 1 } });
+    await expect(repository.commitLessonTransition({ assignmentId: 1002, subjectId: 2 }, restored, NOW)).rejects.toThrow('Lesson availability changed');
+  } finally { await db.close(); }
+});
+
+test('advances to the eligible partial prompt when a remote start removes the current subject', async () => {
+  const db = await lessonDatabase();
+  try {
+    await seedSubject(db, 2, 'Second');
+    await db.run(`INSERT INTO assignments (id, subject_id, subject_type, srs_stage, unlocked_at, hidden, data_updated_at, resource_json) VALUES (1002, 2, 'kanji', 0, ?, 0, ?, '{}')`, [NOW.toISOString(), NOW.toISOString()]);
+    const repository = new SessionRepository(db);
+    const previous = await repository.startLessonSession([candidate(kanjiFixture.id, assignmentFixture.id), candidate(2)], NOW);
+    const quiz = { ...previous, phase: 'quiz' as const, quizState: { ...previous.quizState, currentSubjectId: kanjiFixture.id, currentPrompt: 'reading' as const, questionProgress: { answeredMeaningSubjectIds: [kanjiFixture.id, 2] } } };
+    await repository.saveLessonSession(quiz, NOW);
+    await db.run('UPDATE assignments SET started_at = ?, srs_stage = 1 WHERE subject_id = ?', [NOW.toISOString(), kanjiFixture.id]);
+    const restored = await repository.revalidateLessonSession(quiz, NOW);
+    expect(restored.items).toEqual([{ subjectId: 2, assignmentId: 1002 }]);
+    expect(restored.quizState.currentPrompt).toBe('reading');
+    expect(restored.quizState.questionProgress?.answeredMeaningSubjectIds).toEqual([2]);
+  } finally { await db.close(); }
+});
+
+test('resume reads the latest committed lesson snapshot inside its transaction', async () => {
+  const db = await lessonDatabase();
+  try {
+    const repository = new SessionRepository(db);
+    const previous = await repository.startLessonSession([candidate(kanjiFixture.id, assignmentFixture.id)], NOW);
+    const completed = await repository.commitLessonTransition(previous.items[0]!, {
+      ...previous, phase: 'complete', queuePosition: 1,
+      quizState: { ...previous.quizState, completedSubjectIds: [kanjiFixture.id] },
+    }, NOW);
+    const restored = await repository.revalidateLessonSession(previous, NOW);
+    expect(restored).toEqual(completed);
+    expect(await repository.loadLessonSession()).toEqual(completed);
+    expect(await db.first('SELECT COUNT(*) AS count FROM pending_progress')).toEqual({ count: 1 });
+  } finally { await db.close(); }
+});
+
+async function lessonDatabase() {
+  const db = await NodeTestDatabase.open();
+  await migrateDatabase(db);
+  await new ResourceRepository(db).replaceUser(userFixture);
+  await new SubjectRepository(db).replaceSubjects([kanjiFixture], null);
+  await new AssignmentRepository(db).replaceAssignments([{ ...assignmentFixture, data: { ...assignmentFixture.data, srs_stage: 0, started_at: null, unlocked_at: NOW.toISOString() } }], null);
+  return db;
+}
 
 function candidate(
   subjectId: number,

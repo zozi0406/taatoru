@@ -50,3 +50,15 @@ test('invalid persisted values use safe defaults instead of breaking sessions', 
     await db.close();
   }
 });
+
+
+test('legacy overrides do not enable skipping and both preferences persist independently', async () => {
+  const db = await NodeTestDatabase.open();
+  await migrateDatabase(db);
+  try {
+    await db.run("INSERT INTO settings (key, value) VALUES ('reviews.allowOverrides', '1')");
+    expect((await loadStudySettings(db)).allowSkipping).toBe(false);
+    await saveStudySettings(db, { ...DEFAULT_STUDY_SETTINGS, allowOverrides: false, allowSkipping: true });
+    expect(await loadStudySettings(db)).toMatchObject({ allowOverrides: false, allowSkipping: true });
+  } finally { await db.close(); }
+});

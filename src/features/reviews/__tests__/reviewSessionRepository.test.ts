@@ -384,3 +384,34 @@ function userWithMaxLevel(maxLevelGranted: number): Resource<UserData, 'user'> {
     },
   };
 }
+
+
+test('empty wrapped completion survives restart without creating pending writes or clearing due reviews', async () => {
+  const db = await reviewDatabase();
+  try {
+    const repository = new ReviewSessionRepository(db);
+    const started = await repository.startReviewSession([{ assignmentId: 501, subjectId: 201 }], NOW);
+    const wrapped = { ...started, wrappingUp: true, items: [], phase: 'complete' as const, currentPrompt: null };
+    await repository.commitReviewTransition(null, wrapped, NOW);
+    const restored = await new ReviewSessionRepository(db).loadReviewSession();
+    expect(restored).toMatchObject({ wrappingUp: true, items: [], phase: 'complete' });
+    expect(await repository.loadReviewSubjects(restored!)).toEqual([]);
+    expect(await rowCount(db, 'pending_progress')).toBe(0);
+    expect(await db.first('SELECT available_at FROM assignments')).toEqual({available_at: '2026-07-29T11:00:00.000Z'});
+  } finally { await db.close(); }
+});
+
+
+test('wrapped attempts survive restart and an assignment replacement cannot introduce an untouched review', async () => {
+  const db = await reviewDatabase();
+  try {
+    const repository = new ReviewSessionRepository(db);
+    const started = await repository.startReviewSession([{ assignmentId: assignmentFixture.id, subjectId: kanjiFixture.id }], NOW);
+    await repository.saveReviewSession({ ...started, wrappingUp: true, currentPrompt: 'reading', questionProgress: {answeredMeaningSubjectIds: [kanjiFixture.id]}, incorrectMeaningBySubject: {[kanjiFixture.id]: 1} }, NOW);
+    const restored = await repository.loadReviewSession();
+    expect(await repository.revalidateReviewSession(restored!, NOW)).toMatchObject({wrappingUp: true, currentPrompt: 'reading', incorrectMeaningBySubject: {[kanjiFixture.id]: 1}});
+    const revalidated = await repository.revalidateReviewSession({ ...restored!, items: [{ assignmentId: 9999, subjectId: kanjiFixture.id }] }, NOW);
+    expect(revalidated).toMatchObject({phase: 'complete', currentPrompt: null, items: [], wrappingUp: true});
+    expect(await rowCount(db, 'pending_progress')).toBe(0);
+  } finally {await db.close();}
+});

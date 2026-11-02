@@ -14,6 +14,7 @@ export type ReviewOrder =
 export interface StudySettings {
   readonly exactMatch: boolean;
   readonly allowOverrides: boolean;
+  readonly allowSkipping: boolean;
   readonly autoAdvance: boolean;
   readonly showFullAnswer: boolean;
   readonly readingInput: 'romaji' | 'kana';
@@ -33,6 +34,7 @@ export interface StudySettings {
 export const DEFAULT_STUDY_SETTINGS: StudySettings = {
   exactMatch: false,
   allowOverrides: true,
+  allowSkipping: false,
   autoAdvance: true,
   showFullAnswer: false,
   readingInput: 'kana',
@@ -52,6 +54,7 @@ export const DEFAULT_STUDY_SETTINGS: StudySettings = {
 const KEYS: Record<keyof StudySettings, string> = {
   exactMatch: 'reviews.exactMatch',
   allowOverrides: 'reviews.allowOverrides',
+  allowSkipping: 'reviews.allowSkipping',
   autoAdvance: 'reviews.autoAdvance',
   showFullAnswer: 'reviews.showFullAnswer',
   readingInput: 'reviews.readingInput',

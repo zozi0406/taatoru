@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
+import { Text, View } from 'react-native';
+import { StudyAction } from '@/features/sessions/StudySubjectInformation';
+import { useTheme } from '@/ui/theme/ThemeProvider';
 import type { SubjectResource } from '@/api/types';
-import type { LessonSessionSnapshot } from '@/features/sessions/SessionRepository';
+import {
+  LessonAvailabilityChangedError,
+  type LessonSessionSnapshot,
+} from '@/features/sessions/SessionRepository';
 import {
   DEFAULT_STUDY_SETTINGS,
   type StudySettings,
@@ -14,9 +20,11 @@ import { LessonQuizStage } from './LessonQuizStage';
 import { LessonSubjectStage } from './LessonSubjectStage';
 
 interface LessonSessionScreenProps {
+  readonly restoring?: boolean;
   readonly initialSnapshot: LessonSessionSnapshot;
   readonly onCommitTransition: (transition: LessonTransition) => Promise<void>;
   readonly onExit: () => void;
+  readonly onReload?: () => void;
   readonly onFinish: () => Promise<void>;
   readonly onPlayAudio?: (url: string) => void;
   readonly subjects: readonly SubjectResource[];
@@ -29,8 +37,10 @@ interface LessonSessionScreenProps {
 
 export function LessonSessionScreen({
   initialSnapshot,
+  restoring = false,
   onCommitTransition,
   onExit,
+  onReload,
   onFinish,
   onPlayAudio,
   subjects,
@@ -40,6 +50,8 @@ export function LessonSessionScreen({
   onSettings,
   onOpenSubject,
 }: LessonSessionScreenProps) {
+  const theme = useTheme();
+  const [availabilityError, setAvailabilityError] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const presenting = useRef(false);
   const mounted = useRef(true);
@@ -53,8 +65,16 @@ export function LessonSessionScreen({
     subjects.map((subject) => [subject.id, subject.object]),
   );
   const apply = async (type: Parameters<typeof reduceLesson>[1]['type']) => {
+    if (!mounted.current) throw new Error('Lesson session is no longer active.');
     const result = reduceLesson(snapshot, { type }, types, settings);
-    await onCommitTransition(result);
+    try {
+      await onCommitTransition(result);
+    } catch (failure) {
+      if (failure instanceof LessonAvailabilityChangedError && mounted.current) {
+        setAvailabilityError(failure.message);
+      }
+      throw failure;
+    }
     if (!mounted.current) return;
     setSnapshot(result.snapshot);
     const current = subjects.find(
@@ -78,7 +98,7 @@ export function LessonSessionScreen({
     apply,
   });
   const present = async (type: Parameters<typeof reduceLesson>[1]['type']) => {
-    if (presenting.current) return;
+    if (presenting.current || restoring) return;
     presenting.current = true;
     setPresentationBusy(true);
     setPresentationError(null);
@@ -93,6 +113,23 @@ export function LessonSessionScreen({
       setPresentationBusy(false);
     }
   };
+  if (availabilityError !== null) return (
+    <View style={{
+      flex: 1,
+      justifyContent: 'center',
+      padding: theme.spacing.xl,
+      gap: theme.spacing.md,
+      backgroundColor: theme.colors.canvas,
+    }}>
+      <Text accessibilityRole="alert" style={{ color: theme.colors.danger }}>
+        {availabilityError}
+      </Text>
+      {onReload === undefined ? null : (
+        <StudyAction label="Reload lessons" onPress={onReload} />
+      )}
+      <StudyAction label="Return home" onPress={onExit} />
+    </View>
+  );
   if (snapshot.phase === 'complete')
     return (
       <StudyCompletion
@@ -100,7 +137,7 @@ export function LessonSessionScreen({
         count={snapshot.items.length}
         detail="new subjects added to Apprentice"
         finishLabel="Finish lessons"
-        onFinish={onFinish}
+        onFinish={async () => { if (!restoring) await onFinish(); }}
       />
     );
   const item = snapshot.items[snapshot.queuePosition];
@@ -124,11 +161,11 @@ export function LessonSessionScreen({
         subject={subject}
         material={studyMaterials[subject.id]}
         onPlayAudio={playAudio}
-        busy={presentationBusy}
+        busy={presentationBusy || restoring}
         error={presentationError}
-        onExit={() => { if (!presenting.current) onExit(); }}
-        onSettings={onSettings === undefined ? undefined : () => { if (!presenting.current) onSettings(); }}
-        onOpenSubject={onOpenSubject === undefined ? undefined : (id) => { if (!presenting.current) onOpenSubject(id); }}
+        onExit={() => { if (!presenting.current && !restoring) onExit(); }}
+        onSettings={onSettings === undefined ? undefined : () => { if (!presenting.current && !restoring) onSettings(); }}
+        onOpenSubject={onOpenSubject === undefined ? undefined : (id) => { if (!presenting.current && !restoring) onOpenSubject(id); }}
         onNext={() => {
           void present('advance-presentation');
         }}
@@ -146,34 +183,34 @@ export function LessonSessionScreen({
     <LessonQuizStage
       key={`${subject.id}-${prompt}-${actions.revision}`}
       feedback={actions.feedback}
-      busy={actions.busy}
+      busy={actions.busy || restoring}
       error={actions.error}
       settings={settings}
       index={snapshot.quizState.completedSubjectIds.length}
       total={snapshot.items.length}
       subject={subject}
       prompt={prompt}
-      onExit={() => actions.guard(onExit)}
-      onSettings={onSettings === undefined ? undefined : () => actions.guard(onSettings)}
-      onOpenSubject={onOpenSubject === undefined ? undefined : (id) => actions.guard(() => onOpenSubject(id))}
+      onExit={() => { if (!restoring) actions.guard(onExit); }}
+      onSettings={onSettings === undefined ? undefined : () => { if (!restoring) actions.guard(onSettings); }}
+      onOpenSubject={onOpenSubject === undefined ? undefined : (id) => { if (!restoring) actions.guard(() => onOpenSubject(id)); }}
       onPlayAudio={playAudio}
       material={studyMaterials[subject.id]}
       onSubmit={(answer) =>
-        actions.submit(
+        !restoring && actions.submit(
           answer,
           prompt,
           subject,
           studyMaterials[subject.id]?.meaningSynonyms,
         )
       }
-      onContinue={actions.continue}
-      onOverride={actions.override}
-      onSkip={actions.skip}
-      onRetrySave={actions.retrySave}
+      onContinue={() => { if (!restoring) actions.continue(); }}
+      onOverride={() => { if (!restoring) actions.override(); }}
+      onSkip={() => { if (!restoring) actions.skip(); }}
+      onRetrySave={() => { if (!restoring) actions.retrySave(); }}
       onAddSynonym={
         actions.addSynonym === undefined
           ? undefined
-          : (answer) => actions.addSynonym!(subject.id, answer)
+          : (answer) => { if (!restoring) actions.addSynonym!(subject.id, answer); }
       }
     />
   );

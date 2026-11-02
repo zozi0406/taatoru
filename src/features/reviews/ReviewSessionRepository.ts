@@ -23,6 +23,7 @@ export interface CompletedReviewItem extends ReviewSessionItem {
 }
 
 export interface ReviewSessionSnapshot {
+  readonly wrappingUp?: boolean;
   readonly questionProgress?: StudyQuestionProgress;
   readonly createdAt: string;
   readonly currentPrompt: ReviewPrompt | null;
@@ -43,6 +44,7 @@ interface SessionRow {
 }
 
 interface StoredReviewState {
+  readonly wrappingUp?: boolean;
   readonly questionProgress?: StudyQuestionProgress;
   readonly currentPrompt: ReviewPrompt | null;
   readonly incorrectMeaningBySubject: Readonly<Record<string, number>>;
@@ -147,8 +149,10 @@ export class ReviewSessionRepository {
             resetIds.add(item.subjectId);
             return [];
           }
-          if (current.assignmentId !== item.assignmentId)
+          if (current.assignmentId !== item.assignmentId) {
             resetIds.add(item.subjectId);
+            if (snapshot.wrappingUp) return [];
+          }
           return [
             { subjectId: item.subjectId, assignmentId: current.assignmentId },
           ];
@@ -224,6 +228,7 @@ export class ReviewSessionRepository {
     snapshot: ReviewSessionSnapshot,
   ): Promise<readonly SubjectResource[]> {
     const ids = [...new Set(snapshot.items.map(({ subjectId }) => subjectId))];
+    if (ids.length === 0) return [];
     const rows = await this.db.all<SubjectRow>(
       `SELECT id, resource_json AS resourceJson
        FROM subjects s
@@ -313,6 +318,7 @@ function toStoredState(snapshot: ReviewSessionSnapshot): StoredReviewState {
     incorrectMeaningBySubject: snapshot.incorrectMeaningBySubject,
     incorrectReadingBySubject: snapshot.incorrectReadingBySubject,
     questionProgress: snapshot.questionProgress,
+    wrappingUp: snapshot.wrappingUp,
   };
 }
 

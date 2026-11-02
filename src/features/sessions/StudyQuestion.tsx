@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Keyboard,
   KeyboardAvoidingView,
@@ -44,6 +44,8 @@ export interface StudyQuestionProps {
   readonly onContinue: () => void;
   readonly onOverride: () => void;
   readonly onSkip: () => void;
+  readonly onWrapUp?: () => void;
+  readonly wrappingUp?: boolean;
   readonly onRetrySave: () => void;
   readonly onAddSynonym?: (answer: string) => void;
   readonly onReload?: () => void;
@@ -67,6 +69,8 @@ export function StudyQuestion({
   onContinue,
   onOverride,
   onSkip,
+  onWrapUp,
+  wrappingUp,
   onAddSynonym,
   onRetrySave,
   onReload,
@@ -85,14 +89,21 @@ export function StudyQuestion({
   const insets = useSafeAreaInsets();
   const input = useRef<TextInput>(null);
   const [answer, setAnswer] = useState('');
-  const [showAll, setShowAll] = useState(settings.showFullAnswer);
+  const [readyImageSubject, setReadyImageSubject] = useState<number | null>(null);
+  const imageReady = subject.data.characters !== null ||
+    readyImageSubject === subject.id;
+  const onImageReady = useCallback((ready: boolean) => {
+    setReadyImageSubject(ready ? subject.id : null);
+  }, [subject.id]);
+  const [revealedAll, setShowAll] = useState(false);
+  const showAll = settings.showFullAnswer || revealedAll;
   const graded = feedback !== null && feedback.verdict !== 'retry';
   useEffect(() => {
     if (graded) Keyboard.dismiss();
   }, [graded]);
   const submit = () => {
     if (graded) onContinue();
-    else if (answer.trim() !== '' && !busy) onSubmit(answer);
+    else if (imageReady && answer.trim() !== '' && !busy) onSubmit(answer);
   };
   const resultColor =
     feedback?.verdict === 'correct'
@@ -189,7 +200,7 @@ export function StudyQuestion({
           paddingRight: 16 + insets.right,
         }}
       >
-        <StudySubjectHero subject={subject} />
+        <StudySubjectHero subject={subject} onReadyChange={onImageReady} />
         <View
           style={{
             alignItems: 'center',
@@ -224,7 +235,7 @@ export function StudyQuestion({
           autoCapitalize="none"
           autoCorrect={false}
           spellCheck={false}
-          editable={!graded && !busy}
+          editable={!graded && !busy && imageReady}
           onChangeText={(value) =>
             setAnswer(
               prompt === 'reading' && settings.readingInput === 'kana'
@@ -356,13 +367,30 @@ export function StudyQuestion({
             />
           </>
         ) : null}
-        {settings.allowOverrides ? (
-          <StudyAction
-            label="Ask again later"
-            onPress={onSkip}
-            disabled={busy || error !== null}
-          />
+        {settings.allowSkipping ? (
+          <>
+            <Text style={[theme.typography.caption, { color: theme.colors.textMuted }]}>
+              Ask again later resets this subject’s completed answers. In reviews
+              it also resets mistake counts. It remains available until completed.
+            </Text>
+            <StudyAction
+              label="Ask again later"
+              onPress={onSkip}
+              disabled={busy || error !== null}
+            />
+          </>
         ) : null}
+        {wrappingUp ? (
+          <Text style={[theme.typography.caption, { color: theme.colors.textMuted }]}>
+            Wrapping up attempted subjects. Untouched reviews remain due.
+          </Text>
+        ) : onWrapUp === undefined ? null : (
+          <StudyAction
+            label="Wrap up reviews"
+            onPress={onWrapUp}
+            disabled={busy || error !== null || graded}
+          />
+        )}
       </ScrollView>
       <View
         style={{
@@ -379,7 +407,8 @@ export function StudyQuestion({
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={graded ? 'Continue' : 'Submit answer'}
-          disabled={busy || error !== null || (!graded && answer.trim() === '')}
+          disabled={busy || error !== null ||
+            (!graded && (!imageReady || answer.trim() === ''))}
           onPress={submit}
           style={{
             minHeight: minimumTouchTarget,
@@ -389,7 +418,8 @@ export function StudyQuestion({
             justifyContent: 'center',
             backgroundColor: theme.colors.accent,
             opacity:
-              busy || error !== null || (!graded && answer.trim() === '')
+              busy || error !== null ||
+              (!graded && (!imageReady || answer.trim() === ''))
                 ? 0.5
                 : 1,
           }}

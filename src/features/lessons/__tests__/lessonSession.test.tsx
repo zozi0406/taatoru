@@ -1,6 +1,7 @@
-import { act, fireEvent, screen } from '@testing-library/react-native';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
 
-import type { LessonSessionSnapshot } from '@/features/sessions/SessionRepository';
+import { radicalImages } from '@/features/media/radicalImages';
+import { LessonAvailabilityChangedError, type LessonSessionSnapshot } from '@/features/sessions/SessionRepository';
 import { radicalFixture, kanjiFixture } from '@/fixtures/api';
 import { renderApp } from '@/test/render';
 import { ThemeProvider } from '@/ui/theme/ThemeProvider';
@@ -99,7 +100,11 @@ test('moves from subject presentation to quiz and completes once', async () => {
   expect(onFinish).toHaveBeenCalledTimes(1);
 });
 
-test('renders a radical image and exposes pronunciation audio', async () => {
+test('renders a locally prepared radical image with a neutral accessibility label', async () => {
+  const load = jest.spyOn(radicalImages, 'load').mockResolvedValue({
+    kind: 'svg',
+    content: '<svg viewBox="0 0 10 10"><path d="M1 1h8v8H1z"/></svg>',
+  });
   const onPlayAudio = jest.fn();
   const imageRadical = {
     ...radicalFixture,
@@ -108,8 +113,8 @@ test('renders a radical image and exposes pronunciation audio', async () => {
       characters: null,
       character_images: [
         {
-          url: 'https://example.com/radical.png',
-          content_type: 'image/png' as const,
+          url: 'https://media.example.test/lesson-square.svg',
+          content_type: 'image/svg+xml' as const,
           metadata: {},
         },
       ],
@@ -128,7 +133,8 @@ test('renders a radical image and exposes pronunciation audio', async () => {
     </ThemeProvider>,
   );
 
-  expect(screen.getByLabelText('Ground radical image')).toBeVisible();
+  await waitFor(() => expect(screen.getByLabelText('Radical image')).toBeVisible());
+  load.mockRestore();
 });
 
 test('can read forward and back before starting the quiz without completing lessons', async () => {
@@ -203,3 +209,19 @@ function snapshot(): LessonSessionSnapshot {
     updatedAt: '2026-07-29T12:00:00.000Z',
   };
 }
+
+test('a stale lesson save offers safe reload and home instead of retrying a stale completion', async () => {
+  const onReload = jest.fn();
+  const onExit = jest.fn();
+  await renderApp(<ThemeProvider scheme="light"><LessonSessionScreen
+    initialSnapshot={snapshot()}
+    onCommitTransition={async () => { throw new LessonAvailabilityChangedError(); }}
+    onReload={onReload} onExit={onExit} onFinish={async () => undefined} subjects={[radicalFixture]}
+  /></ThemeProvider>);
+  await fireEvent.press(screen.getByRole('button', { name: 'Continue to quiz' }));
+  await screen.findByText('Lesson availability changed. Reload lessons to continue.');
+  await fireEvent.press(screen.getByRole('button', { name: 'Reload lessons' }));
+  expect(onReload).toHaveBeenCalledTimes(1);
+  await fireEvent.press(screen.getByRole('button', { name: 'Return home' }));
+  expect(onExit).toHaveBeenCalledTimes(1);
+});

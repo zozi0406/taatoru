@@ -51,6 +51,7 @@ test.each(['lesson', 'review'] as const)('%s refreshes synonyms on focus and syn
   try {
     if (kind === 'review') await new ReviewSessionRepository(db).startReviewSession([{ assignmentId: 501, subjectId: 201 }]);
     else {
+      await db.run('UPDATE assignments SET srs_stage = 0, started_at = NULL WHERE id = 501');
       const sessions = new SessionRepository(db);
       const started = await sessions.startLessonSession([{ assignmentId: 501, subjectId: 201, available: true,
         excluded: false, lessonPosition: 1, level: 1, subjectType: 'kanji' }]);

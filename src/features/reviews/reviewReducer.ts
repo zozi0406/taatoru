@@ -3,7 +3,10 @@ import {
   DEFAULT_STUDY_SETTINGS,
   type StudySettings,
 } from '@/features/settings/studySettings';
-import { advanceStudyQuestion } from '@/features/sessions/studyScheduler';
+import {
+  advanceStudyQuestion,
+  firstStudyPrompt,
+} from '@/features/sessions/studyScheduler';
 import type {
   CompletedReviewItem,
   ReviewSessionSnapshot,
@@ -14,7 +17,8 @@ export type ReviewEvent =
   | { readonly type: 'incorrect' }
   | { readonly type: 'continue-incorrect' }
   | { readonly type: 'override-correct' }
-  | { readonly type: 'skip' };
+  | { readonly type: 'skip' }
+  | { readonly type: 'wrap-up' };
 
 export interface ReviewTransition {
   readonly completedItem: CompletedReviewItem | null;
@@ -34,6 +38,12 @@ export function reduceReview(
     item === undefined
   ) {
     return { completedItem: null, snapshot };
+  }
+  if (event.type === 'wrap-up') {
+    return {
+      completedItem: null,
+      snapshot: wrapUpReviews(snapshot, subjectTypes, options),
+    };
   }
   if (event.type === 'incorrect') {
     const key =
@@ -99,6 +109,14 @@ export function reduceReview(
           : 'correct',
   });
   const complete = next.position >= next.items.length;
+  const updated: ReviewSessionSnapshot = {
+    ...adjusted,
+    items: next.items,
+    questionProgress: next.progress,
+    currentPrompt: next.prompt,
+    phase: complete ? 'complete' : 'active',
+    queuePosition: next.position,
+  };
   return {
     completedItem:
       next.completedSubjectId === null
@@ -110,13 +128,46 @@ export function reduceReview(
             incorrectReadingAnswers:
               adjusted.incorrectReadingBySubject[item.subjectId] ?? 0,
           },
-    snapshot: {
-      ...adjusted,
-      items: next.items,
-      questionProgress: next.progress,
-      currentPrompt: next.prompt,
-      phase: complete ? 'complete' : 'active',
-      queuePosition: next.position,
-    },
+    snapshot:
+      snapshot.wrappingUp && event.type === 'skip'
+        ? wrapUpReviews(updated, subjectTypes, options)
+        : updated,
+  };
+}
+
+/** Keep only subjects with persisted attempts; simply viewing a prompt is not an attempt. */
+function wrapUpReviews(
+  snapshot: ReviewSessionSnapshot,
+  types: Readonly<Record<number, SubjectObject>>,
+  options: StudySettings,
+): ReviewSessionSnapshot {
+  const current = snapshot.items[snapshot.queuePosition];
+  const progress = snapshot.questionProgress ?? {
+    answeredMeaningSubjectIds:
+      snapshot.currentPrompt === 'reading' && current !== undefined
+        ? [current.subjectId] : [],
+  };
+  const meanings = new Set(progress.answeredMeaningSubjectIds ?? []);
+  const readings = new Set(progress.answeredReadingSubjectIds ?? []);
+  const remaining = snapshot.items.slice(snapshot.queuePosition).filter(
+    ({ subjectId }) =>
+      meanings.has(subjectId) || readings.has(subjectId) ||
+      (snapshot.incorrectMeaningBySubject[subjectId] ?? 0) > 0 ||
+      (snapshot.incorrectReadingBySubject[subjectId] ?? 0) > 0,
+  );
+  const next = remaining[0];
+  return {
+    ...snapshot,
+    wrappingUp: true,
+    questionProgress: progress,
+    items: [...snapshot.items.slice(0, snapshot.queuePosition), ...remaining],
+    phase: next === undefined ? 'complete' : 'active',
+    currentPrompt:
+      next === undefined ? null
+        : meanings.has(next.subjectId) ? 'reading'
+          : readings.has(next.subjectId) ? 'meaning'
+            : firstStudyPrompt(
+                types[next.subjectId], options.questionOrder, next.subjectId,
+              ),
   };
 }

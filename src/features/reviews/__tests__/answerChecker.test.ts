@@ -145,3 +145,20 @@ function answer(
     ...options,
   });
 }
+
+test('preserves the nasal separator when grading a romaji reading', () => {
+  expect(
+    checkAnswer({
+      answer: "shin'you",
+      prompt: 'reading',
+      subject: {
+        ...answerVocabulary,
+        data: {
+          ...answerVocabulary.data,
+          characters: '信用',
+          readings: [{ reading: 'しんよう', primary: true, accepted_answer: true }],
+        },
+      },
+    }),
+  ).toEqual({ verdict: 'correct', matched: 'しんよう' });
+});

@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
+import { Text } from 'react-native';
+import { useTheme } from '@/ui/theme/ThemeProvider';
+import { StudyAction } from '@/features/sessions/StudySubjectInformation';
 import type { SubjectResource } from '@/api/types';
 import {
   DEFAULT_STUDY_SETTINGS,
@@ -41,6 +44,7 @@ export function ReviewSessionScreen({
   onPlayAudio,
   onOpenSubject,
 }: ReviewSessionScreenProps) {
+  const theme = useTheme();
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -72,6 +76,14 @@ export function ReviewSessionScreen({
       }
     },
   });
+  const completed = snapshot.items.slice(0, snapshot.queuePosition);
+  const missed = completed.filter(
+    ({ subjectId }) =>
+      (snapshot.incorrectMeaningBySubject[subjectId] ?? 0) +
+        (snapshot.incorrectReadingBySubject[subjectId] ?? 0) >
+      0,
+  );
+  const correct = completed.length - missed.length;
   if (snapshot.phase === 'complete')
     return (
       <StudyCompletion
@@ -80,7 +92,36 @@ export function ReviewSessionScreen({
         detail="reviews recorded on this device"
         finishLabel="Finish reviews"
         onFinish={onFinish}
-      />
+      >
+        <Text style={[theme.typography.body, { color: theme.colors.text }]}>
+          {completed.length === 0
+            ? 'No reviews completed. Untouched reviews remain due.'
+            : `${Math.round((correct / completed.length) * 100)}% accuracy · ${correct} of ${completed.length} subjects correct`}
+        </Text>
+        {missed.length === 0 ? null : (
+          <Text style={[theme.typography.label, { color: theme.colors.text }]}>
+            Missed subjects
+          </Text>
+        )}
+        {missed.map(({ subjectId }) => {
+          const subject = subjects.find(({ id }) => id === subjectId);
+          const meaning =
+            subject?.data.meanings.find(({ primary }) => primary)?.meaning ??
+            `Subject ${subjectId}`;
+          return onOpenSubject === undefined ? (
+            <Text key={subjectId} style={{ color: theme.colors.text }}>
+              {meaning}
+            </Text>
+          ) : (
+            <StudyAction
+              key={subjectId}
+              label={meaning}
+              accessibilityLabel={`Review missed subject: ${meaning}`}
+              onPress={() => onOpenSubject(subjectId)}
+            />
+          );
+        })}
+      </StudyCompletion>
     );
   const item = snapshot.items[snapshot.queuePosition];
   const subject = subjects.find(({ id }) => id === item?.subjectId);
@@ -117,6 +158,20 @@ export function ReviewSessionScreen({
           studyMaterials[subject.id]?.meaningSynonyms,
         )
       }
+      wrappingUp={snapshot.wrappingUp}
+      onWrapUp={() => {
+        if (
+          actions.error !== null ||
+          (actions.feedback !== null && actions.feedback.verdict !== 'retry')
+        ) return;
+        void actions.perform(async () => {
+          const result = reduceReview(
+            snapshot, { type: 'wrap-up' }, types, settings,
+          );
+          await onCommitTransition(result);
+          if (mounted.current) setSnapshot(result.snapshot);
+        });
+      }}
       onContinue={actions.continue}
       onOverride={actions.override}
       onSkip={actions.skip}

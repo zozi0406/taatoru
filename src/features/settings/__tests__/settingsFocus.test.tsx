@@ -67,3 +67,20 @@ test('returning to Settings loads modal changes before saving a new draft', asyn
     await db.close();
   }
 });
+
+test('returning to Settings preserves an unsaved draft', async () => {
+  const db = await NodeTestDatabase.open();
+  mockDatabase = db;
+  await migrateDatabase(db);
+  try {
+    const rendered = await renderApp(<ThemeProvider scheme="light"><SettingsRoute /></ThemeProvider>);
+    await screen.findByLabelText('Allow skipping');
+    await fireEvent(screen.getByLabelText('Allow skipping'), 'valueChange', true);
+    await act(async () => { mockFocus(); });
+    expect(screen.getByLabelText('Allow skipping')).toHaveProp('value', true);
+    await fireEvent.press(screen.getByRole('button', {name: 'Save settings'}));
+    await screen.findByText('Settings saved.');
+    expect((await loadStudySettings(db)).allowSkipping).toBe(true);
+    await rendered.unmount();
+  } finally { await db.close(); }
+});

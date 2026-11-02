@@ -1,6 +1,6 @@
-import { Image, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import { Shapes } from 'lucide-react-native';
-import { SvgUri } from 'react-native-svg';
+import { RadicalImage } from './RadicalImage';
 
 import type { SubjectObject } from '@/api/types';
 import { subjectColors } from '../theme/colors';
@@ -30,10 +30,8 @@ export function SubjectGlyph({
         >
           {characters}
         </Text>
-      ) : image?.content_type === 'image/svg+xml' ? (
-        <SvgUri height={36} width={36} uri={image.url} />
       ) : image !== undefined ? (
-        <Image source={{ uri: image.url }} style={styles.image} />
+        <RadicalImage compact image={image} size={36} color={colors.foreground} />
       ) : (
         <Shapes color={colors.foreground} size={28} strokeWidth={1.6} />
       )}
@@ -51,5 +49,4 @@ const styles = StyleSheet.create({
     width: 62,
   },
   glyph: { fontSize: 28, fontWeight: '500' },
-  image: { height: 36, width: 36 },
 });

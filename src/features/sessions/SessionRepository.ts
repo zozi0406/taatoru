@@ -1,9 +1,14 @@
-import type { SubjectResource } from '@/api/types';
+import type { SubjectObject, SubjectResource } from '@/api/types';
 import type { Database, DatabaseTransaction } from '@/db/Database';
+import {
+  AVAILABLE_LESSONS_QUERY,
+  type AvailableAssignment,
+} from '@/db/repositories/AssignmentRepository';
+import type { QuestionOrder } from '@/features/settings/studySettings';
 import { SUBJECT_WITHIN_GRANTED_LEVEL } from '@/db/subscription';
 import type { LessonCandidate } from '@/features/lessons/types';
 import { PendingWriteRepository } from '@/features/sync/PendingWriteRepository';
-import type { StudyQuestionProgress } from './studyScheduler';
+import { firstStudyPrompt, type StudyQuestionProgress } from './studyScheduler';
 
 export type LessonSessionPhase =
   'complete' | 'presentation' | 'quiz' | 'selection';
@@ -60,6 +65,12 @@ const EMPTY_QUIZ_STATE: LessonQuizState = {
   incorrectReadingBySubject: {},
 };
 
+export class LessonAvailabilityChangedError extends Error {
+  constructor() {
+    super('Lesson availability changed. Reload lessons to continue.');
+  }
+}
+
 export class SessionRepository {
   constructor(private readonly db: Database) {}
 
@@ -94,6 +105,15 @@ export class SessionRepository {
   ): Promise<LessonSessionSnapshot> {
     return this.db.transaction(async (tx) => {
       if (completedItem !== null) {
+        const available = await tx.all<AvailableAssignment>(
+          AVAILABLE_LESSONS_QUERY,
+        );
+        if (!available.some((item) =>
+          item.subjectId === completedItem.subjectId &&
+          item.assignmentId === completedItem.assignmentId,
+        )) {
+          throw new LessonAvailabilityChangedError();
+        }
         await new PendingWriteRepository(this.db).completeLessonInTransaction(
           tx,
           {
@@ -103,6 +123,104 @@ export class SessionRepository {
         );
       }
       return this.saveLessonSessionWith(tx, snapshot, now);
+    });
+  }
+
+  /** Recheck real opportunities, retaining committed subjects and eligible partial answers. */
+  revalidateLessonSession(
+    expected: LessonSessionSnapshot,
+    now = new Date(),
+    questionOrder: QuestionOrder = 'meaning-first',
+  ): Promise<LessonSessionSnapshot> {
+    return this.db.transaction(async (tx) => {
+      const snapshot = await this.loadLessonSessionWith(tx);
+      if (snapshot === null || snapshot.createdAt !== expected.createdAt) {
+        throw new LessonAvailabilityChangedError();
+      }
+      if (snapshot.phase === 'complete') return snapshot;
+      const available = await tx.all<AvailableAssignment>(
+        AVAILABLE_LESSONS_QUERY,
+      );
+      const bySubject = new Map(available.map((item) => [item.subjectId, item]));
+      const completed = new Set(snapshot.quizState.completedSubjectIds);
+      const resetIds = new Set<number>();
+      const items = snapshot.items.flatMap((item) => {
+        if (completed.has(item.subjectId)) return [item];
+        const current = bySubject.get(item.subjectId);
+        if (current === undefined) {
+          resetIds.add(item.subjectId);
+          return [];
+        }
+        if (current.assignmentId === item.assignmentId) return [item];
+        resetIds.add(item.subjectId);
+        return [{ subjectId: item.subjectId, assignmentId: current.assignmentId }];
+      });
+      if (resetIds.size === 0) return snapshot;
+      const quiz = snapshot.quizState;
+      const progress = quiz.questionProgress ?? {
+        answeredMeaningSubjectIds:
+          quiz.currentPrompt === 'reading' && quiz.currentSubjectId !== null
+            ? [quiz.currentSubjectId]
+            : [],
+      };
+      const questionProgress = {
+        answeredMeaningSubjectIds: progress.answeredMeaningSubjectIds?.filter(
+          (id) => !resetIds.has(id),
+        ),
+        answeredReadingSubjectIds: progress.answeredReadingSubjectIds?.filter(
+          (id) => !resetIds.has(id),
+        ),
+      };
+      const filterCounts = (counts: Readonly<Record<string, number>>) =>
+        Object.fromEntries(
+          Object.entries(counts).filter(([id]) => !resetIds.has(Number(id))),
+        );
+      const remainingIds = new Set(items.map(({ subjectId }) => subjectId));
+      const next = snapshot.phase === 'presentation'
+        ? snapshot.items.slice(snapshot.queuePosition).find(
+            (item) => remainingIds.has(item.subjectId),
+          ) ?? items.find((item) => !completed.has(item.subjectId))
+        : items.find((item) =>
+            item.subjectId === quiz.currentSubjectId &&
+            !completed.has(item.subjectId),
+          ) ?? items.find((item) => !completed.has(item.subjectId));
+      const phase = next === undefined ? 'complete' : snapshot.phase;
+      let prompt: LessonPrompt | null = null;
+      if (next !== undefined && phase === 'quiz') {
+        if (next.subjectId === quiz.currentSubjectId && !resetIds.has(next.subjectId)) {
+          prompt = quiz.currentPrompt;
+        } else if (questionProgress.answeredMeaningSubjectIds?.includes(next.subjectId)) {
+          prompt = 'reading';
+        } else if (questionProgress.answeredReadingSubjectIds?.includes(next.subjectId)) {
+          prompt = 'meaning';
+        } else {
+          prompt = firstStudyPrompt(
+            bySubject.get(next.subjectId)?.subjectType as SubjectObject,
+            questionOrder,
+            next.subjectId,
+          );
+        }
+      }
+      return this.saveLessonSessionWith(
+        tx,
+        {
+          ...snapshot,
+          items,
+          phase,
+          queuePosition: next === undefined
+            ? items.length
+            : items.findIndex((item) => item.subjectId === next.subjectId),
+          quizState: {
+            ...quiz,
+            currentSubjectId: phase === 'quiz' ? next?.subjectId ?? null : null,
+            currentPrompt: prompt,
+            questionProgress,
+            incorrectMeaningBySubject: filterCounts(quiz.incorrectMeaningBySubject),
+            incorrectReadingBySubject: filterCounts(quiz.incorrectReadingBySubject),
+          },
+        },
+        now,
+      );
     });
   }
 
@@ -121,12 +239,18 @@ export class SessionRepository {
        WHERE id = 'lesson' AND kind = 'lesson' AND created_at = ?`,
       [JSON.stringify(toStoredState(updated)), updated.updatedAt, snapshot.createdAt],
     );
-    if (saved.changes === 0) throw new Error('Lesson availability changed. Reload lessons to continue.');
+    if (saved.changes === 0) throw new LessonAvailabilityChangedError();
     return updated;
   }
 
-  async loadLessonSession(): Promise<LessonSessionSnapshot | null> {
-    const row = await this.db.first<SessionRow>(
+  loadLessonSession(): Promise<LessonSessionSnapshot | null> {
+    return this.loadLessonSessionWith(this.db);
+  }
+
+  private async loadLessonSessionWith(
+    executor: DatabaseTransaction,
+  ): Promise<LessonSessionSnapshot | null> {
+    const row = await executor.first<SessionRow>(
       `SELECT state_json AS stateJson,
               created_at AS createdAt,
               updated_at AS updatedAt

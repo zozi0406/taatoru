@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
 import { useAppServices } from '@/app/AppProviders';
 import { useTheme } from '@/ui/theme/ThemeProvider';
@@ -13,10 +13,15 @@ import { StudyAction } from '@/features/sessions/StudySubjectInformation';
 export function StudySettingsContainer({
   onClose,
   onSaved,
+  closeRequest,
+  refreshKey,
 }: {
+  readonly closeRequest?: number;
+  readonly refreshKey?: number;
   readonly onClose?: () => void;
   readonly onSaved?: (settings: StudySettings) => void;
 }) {
+  const dirty = useRef(false);
   const { db } = useAppServices();
   const theme = useTheme();
   const [settings, setSettings] = useState<StudySettings | null>(null);
@@ -26,7 +31,7 @@ export function StudySettingsContainer({
     let active = true;
     void loadStudySettings(db)
       .then((loaded) => {
-        if (active) setSettings(loaded);
+        if (active && !dirty.current) setSettings(loaded);
       })
       .catch(() => {
         if (active) setError(true);
@@ -34,7 +39,7 @@ export function StudySettingsContainer({
     return () => {
       active = false;
     };
-  }, [db, attempt]);
+  }, [db, attempt, refreshKey]);
   if (settings === null)
     return (
       <View
@@ -73,6 +78,8 @@ export function StudySettingsContainer({
   return (
     <StudySettingsScreen
       settings={settings}
+      closeRequest={closeRequest}
+      onDirtyChange={(value) => { dirty.current = value; }}
       onClose={onClose}
       onSave={async (next) => {
         await saveStudySettings(db, next);
