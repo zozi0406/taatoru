@@ -2,7 +2,7 @@ import type { Scenario, ScenarioName } from '../scenarios/factory';
 import { PRESETS } from '../scenarios/factory';
 
 export type Command = Record<string, unknown>;
-export const SUITES = ['smoke', 'mutations', 'progression', 'bounds', 'recovery', 'resume', 'materials', 'preacceptance', 'quota', 'rejected', 'sandbox', 'receipt-recovery', 'level-up-auto', 'connection-before', 'material-recovery'] as const;
+export const SUITES = ['smoke', 'mutations', 'progression', 'bounds', 'recovery', 'resume', 'materials', 'preacceptance', 'quota', 'rejected', 'sandbox', 'receipt-recovery', 'level-up-auto', 'connection-before', 'material-recovery', 'reading-input', 'wrap-up'] as const;
 export type Suite = typeof SUITES[number];
 
 /** Expo launcher flags affect development chrome only; application routes stay real. */
@@ -59,6 +59,33 @@ export function lessonCommands(scenario: Scenario, id: number, traversalTimeout 
   return [tap('Choose lessons'), { scrollUntilVisible: { element: { id: `lesson-subject-${id}` }, direction: 'DOWN', timeout: traversalTimeout, speed: traversalTimeout > 30000 ? 80 : 40, waitToSettleTimeoutMs: 500 } },
     { tapOn: { id: `lesson-subject-${id}` } }, tap('Begin selected lessons'), tap('Continue to quiz'),
     ...reviewCommands(scenario, [id]), tap('Finish lessons'), waitFor('home-dashboard')];
+}
+
+/** Complete a real mistake and leave the final subject's reading half for wrap-up. */
+export function wrapUpCommands(scenario: Scenario, ids: readonly number[]): Command[] {
+  const last = ids.at(-1);
+  if (ids.length !== 4 || last === undefined || !scenario.answers[last]?.reading)
+    throw new Error('Wrap-up workload requires four subjects ending in a two-part review');
+  return [tap('Start reviews'), ...answerCommands(scenario, ids[0]!, 'meaning', true, false),
+    ...reviewCommands(scenario, ids.slice(0, -1)), ...answerCommands(scenario, last, 'meaning'),
+    tap('Wrap up reviews'), ...answerCommands(scenario, last, 'reading'),
+    { assertVisible: 'Reviews complete' }, { assertVisible: '.*75%.*' },
+    { assertVisible: scenario.answers[ids[0]!]!.meaning }, tap('Finish reviews'), waitFor('home-dashboard')];
+}
+
+/** Exercise incremental composition through real native text changes before the valid grade. */
+export function readingInputCommands(scenario: Scenario, id: number): Command[] {
+  if (!scenario.answers[id]?.reading) throw new Error('Reading input workload requires a reading');
+  const scrollTo = (text: string): Command => ({ scrollUntilVisible: { element: { text }, direction: 'DOWN', timeout: 30000 } });
+  return [tap('Choose lessons'), scrollTo(scenario.answers[id]!.meaning),
+    { tapOn: { id: `lesson-subject-${id}` } }, tap('Begin selected lessons'),
+    tap('Study settings'), scrollTo('Reading input: Convert to kana'), tap('Reading input: Convert to kana'),
+    scrollTo('Save settings'), tap('Save settings'), tap('Back to study'), tap('Continue to quiz'),
+    ...answerCommands(scenario, id, 'meaning'), waitFor(`study-answer-${id}-reading`),
+    { tapOn: { id: `study-answer-${id}-reading` } },
+    ...[...'annai'].map(character => ({ inputText: character })), { assertVisible: 'あんない' }, { eraseText: {} },
+    ...[...'konnichiha'].map(character => ({ inputText: character })), { assertVisible: 'こんにちは' }, { eraseText: {} },
+    ...answerCommands(scenario, id, 'reading'), tap('Finish lessons'), waitFor('home-dashboard')];
 }
 
 export function assertReviewJournal(

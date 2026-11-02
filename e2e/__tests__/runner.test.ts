@@ -1,6 +1,6 @@
 /** @jest-environment node */
 import { execFileSync } from 'node:child_process';
-import { parseRunnerArgs, selectDevice, reviewCommands, developmentClientLaunchUrl, developmentClientLaunchCommand } from '../runner/flows';
+import { parseRunnerArgs, selectDevice, reviewCommands, developmentClientLaunchUrl, developmentClientLaunchCommand, wrapUpCommands, readingInputCommands } from '../runner/flows';
 import { createScenario } from '../scenarios/factory';
 
 test('isolated development launch suppresses developer onboarding without changing app routes', () => {
@@ -59,6 +59,27 @@ test('mutation command sequence preserves one unoverridden mistake separately fr
 test('manual sandbox defaults to a daily workload and accepts explicit scenarios', () => {
   expect(parseRunnerArgs(['--suite', 'sandbox']).scenario).toBe('daily');
   expect(parseRunnerArgs(['--suite', 'sandbox', '--scenario', 'backlog']).scenario).toBe('backlog');
+});
+
+test('wrap-up suite finishes a begun reading half and retains a real mistake for results', () => {
+  const scenario = createScenario('smoke');
+  const commands = wrapUpCommands(scenario, [1001, 1002, 1003, 1011]);
+  const actions = commands.map(command => command.tapOn).filter(Boolean);
+  expect(parseRunnerArgs(['--suite', 'wrap-up']).scenario).toBe('smoke');
+  expect(actions).toContain('Wrap up reviews');
+  expect(commands).toContainEqual({ assertVisible: '.*75%.*' });
+  expect(commands).toContainEqual({ inputText: 'incorrect invented comet' });
+  expect(JSON.stringify(commands)).toContain('study-answer-1011-reading');
+});
+
+test('reading input suite types n syllables as separate native input events before grading', () => {
+  const scenario = createScenario('smoke');
+  const commands = readingInputCommands(scenario, 1021);
+  expect(parseRunnerArgs(['--suite', 'reading-input']).scenario).toBe('smoke');
+  expect(commands).toContainEqual({ assertVisible: 'あんない' });
+  expect(commands).toContainEqual({ assertVisible: 'こんにちは' });
+  expect(commands.filter(command => command.inputText === 'n')).toHaveLength(4);
+  expect(JSON.stringify(commands)).toContain('Finish lessons');
 });
 
 

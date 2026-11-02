@@ -7,7 +7,7 @@ const { captureFile } = require('../../e2e/runner/capture.ts');
 const { startMetroBridge } = require('../../e2e/runner/metro.ts');
 const { cleanupRunnerResources } = require('../../e2e/runner/cleanup.ts');
 const { startMockServer } = require('../../e2e/mock/server.ts');
-const { parseRunnerArgs, selectDevice, waitFor, tap, reviewCommands, lessonCommands, answerCommands, assertReviewJournal, cancelLessonCommands, assertRetryTimestamps, developmentClientLaunchCommand } = require('../../e2e/runner/flows.ts');
+const { parseRunnerArgs, selectDevice, waitFor, tap, reviewCommands, lessonCommands, answerCommands, assertReviewJournal, cancelLessonCommands, assertRetryTimestamps, developmentClientLaunchCommand, readingInputCommands, wrapUpCommands } = require('../../e2e/runner/flows.ts');
 const ROOT = path.resolve(__dirname, '../..');
 const APP = 'app.taatoru.e2e';
 const SDK = process.env.ANDROID_HOME || path.join(process.env.HOME, 'Library/Android/sdk');
@@ -98,7 +98,23 @@ const options = parseRunnerArgs(process.argv.slice(2));
   const due = server.world.dueReviews().sort((a,b) => a.data.subject_id - b.data.subject_id);
   const ids = due.map(a => a.data.subject_id);
   if (!ids.length && !['bounds', 'materials'].includes(options.suite)) throw new Error('Selected suite requires due reviews');
-  if (options.suite === 'bounds') {
+  let wrappedAssignmentIds;
+  if (options.suite === 'reading-input') {
+    const lesson = server.world.availableLessons().find(item => scenario.answers[item.data.subject_id]?.reading);
+    if (!lesson) throw new Error('No available two-part lesson');
+    await flow('reading-input', readingInputCommands(scenario, lesson.data.subject_id));
+    await poll(() => server.journal.some(entry => entry.accepted && entry.path === `/v2/assignments/${lesson.id}/start`), 'reading-input lesson accepted');
+    if (server.journal.filter(entry => entry.accepted).length !== 1) throw new Error('Reading input check mutated another subject');
+  } else if (options.suite === 'wrap-up') {
+    const firstReading = due.findIndex(item => scenario.answers[item.data.subject_id]?.reading);
+    if (firstReading !== 3) throw new Error('Wrap-up workload requires three one-part reviews before a two-part review');
+    const chosen = due.slice(0, 4);
+    wrappedAssignmentIds = chosen.map(item => item.id);
+    await flow('wrap-up', wrapUpCommands(scenario, chosen.map(item => item.data.subject_id)));
+    await poll(() => server.journal.filter(entry => entry.accepted && entry.path === '/v2/reviews').length === 4, 'wrapped reviews accepted');
+    assertReviewJournal(server.journal, wrappedAssignmentIds, { [chosen[0].id]: 1 });
+    if (server.world.dueReviews().length !== due.length - 4) throw new Error('Wrap-up consumed untouched reviews');
+  } else if (options.suite === 'bounds') {
     const last = server.world.availableLessons().sort((a,b) => a.data.subject_id-b.data.subject_id).at(-1);
     await flow('bounds', [{ assertVisible: '200' }, { assertVisible: '1000' }, ...lessonCommands(scenario, last.data.subject_id, 180000)]);
     await poll(() => server.journal.some(e => e.accepted && e.path === `/v2/assignments/${last.id}/start`), 'distant selected lesson accepted');
@@ -201,6 +217,12 @@ const options = parseRunnerArgs(process.argv.slice(2));
       throw new Error('Rejected work was lost or applied remotely');
   } else if (state.pending_progress.length || state.pending_study_materials.length || state.sync_dispatches.length)
     throw new Error('Durable work did not settle; inspect final/rows.json');
+  if (options.suite === 'wrap-up') {
+    const remaining = state.assignments.filter(item => !wrappedAssignmentIds.includes(item.id) && due.some(original => original.id === item.id));
+    if (remaining.length !== due.length - 4 || remaining.some(item => item.available_at > new Date().toISOString()))
+      throw new Error('Untouched review assignments did not remain due in SQLite');
+    if (state.active_sessions.some(item => item.kind === 'review')) throw new Error('Finished wrap-up left a saved review session');
+  }
   if (options.suite === 'material-recovery') {
     const creates = server.journal.filter(e => e.method === 'POST' && e.path === '/v2/study_materials');
     const material = state.study_materials.find(m => m.subject_id === ids[0]);
