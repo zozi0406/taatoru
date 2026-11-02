@@ -10,7 +10,7 @@ import { SubjectGlyph } from '@/ui/components/SubjectGlyph';
 import { NodeTestDatabase } from '@/db/NodeTestDatabase';
 import { migrateDatabase } from '@/db/migrate';
 import { SubjectRepository } from '@/db/repositories/SubjectRepository';
-import { RadicalImageCache, prepareRadicalImages } from '../radicalImages';
+import { RadicalImageCache, RadicalImagePreparation, prepareRadicalImages } from '../radicalImages';
 
 const mockFiles = new Map<string, string>();
 jest.mock('expo-file-system/legacy', () => ({
@@ -157,4 +157,89 @@ test('a decoded raster failure keeps grading blocked and offers a fresh download
   expect(screen.getByRole('button', { name: 'Retry radical image' })).toBeVisible();
   expect(screen.getByLabelText('Meaning answer')).toHaveProp('editable', false);
   expect(submit).not.toHaveBeenCalled();
+});
+
+test.each([
+  '<svg><g/></svg>',
+  '<svg><defs><path d="M1 1h8v8H1z"/></defs></svg>',
+  '<svg><notSupported/></svg>',
+  '<svg><g><g/></g></svg>',
+])('structurally blank SVG keeps grading blocked with Retry: %s', async (content) => {
+  fetchImage.mockResolvedValueOnce({ ok: true, text: async () => content });
+  await prompt();
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Retry radical image' })).toBeVisible());
+  expect(screen.getByLabelText('Meaning answer')).toHaveProp('editable', false);
+});
+
+async function preparationDatabase() {
+  const db = await NodeTestDatabase.open();
+  await migrateDatabase(db);
+  await new SubjectRepository(db).replaceSubjects(Array.from({ length: 9 }, (_, index) => ({
+    ...subject, id: 1000 + index,
+    data: { ...subject.data, character_images: [{ ...subject.data.character_images[0]!, url: `https://media.example.test/shape-${index}.svg` }] },
+  })), '2026-11-02T12:00:00Z');
+  return db;
+}
+
+test('concurrent library preparations coalesce into one four-wide walk and reuse the prepared version', async () => {
+  const db = await preparationDatabase();
+  const preparation = new RadicalImagePreparation(db);
+  const all = jest.spyOn(db, 'all');
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  fetchImage.mockImplementation(async () => { await held; return { ok: true, text: async () => svg }; });
+  try {
+    const first = preparation.prepare();
+    const second = preparation.prepare();
+    await waitFor(() => expect(fetchImage).toHaveBeenCalledTimes(4));
+    expect(all).toHaveBeenCalledTimes(1);
+    release();
+    await Promise.all([first, second]);
+    expect(fetchImage).toHaveBeenCalledTimes(9);
+    await preparation.prepare();
+    expect(all).toHaveBeenCalledTimes(1);
+  } finally { release(); preparation.dispose(); await db.close(); }
+});
+
+test('disposing library preparation during a held batch never schedules later batches', async () => {
+  const db = await preparationDatabase();
+  const preparation = new RadicalImagePreparation(db);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  fetchImage.mockImplementation(async () => { await held; return { ok: true, text: async () => svg }; });
+  try {
+    const work = preparation.prepare();
+    await waitFor(() => expect(fetchImage).toHaveBeenCalledTimes(4));
+    preparation.dispose();
+    release();
+    await work;
+    await preparation.prepare();
+    expect(fetchImage).toHaveBeenCalledTimes(4);
+  } finally { release(); preparation.dispose(); await db.close(); }
+});
+
+test('a supported path inside nested groups remains usable', async () => {
+  const content = '<svg><defs/><g><g><path d="M1 1h8v8H1z"/></g></g></svg>';
+  fetchImage.mockResolvedValueOnce({ ok: true, text: async () => content });
+  expect(await new RadicalImageCache().load(image)).toEqual({ kind: 'svg', content });
+});
+
+test('backgrounding stops subsequent batches even if preparation is requested again before the held batch settles', async () => {
+  const db = await preparationDatabase();
+  const preparation = new RadicalImagePreparation(db);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  fetchImage.mockImplementation(async () => { await held; return { ok: true, text: async () => svg }; });
+  try {
+    const work = preparation.prepare();
+    await waitFor(() => expect(fetchImage).toHaveBeenCalledTimes(4));
+    preparation.setActive(false);
+    await preparation.prepare();
+    release();
+    await work;
+    expect(fetchImage).toHaveBeenCalledTimes(4);
+    preparation.setActive(true);
+    await preparation.prepare();
+    expect(fetchImage).toHaveBeenCalledTimes(9);
+  } finally { release(); preparation.dispose(); await db.close(); }
 });

@@ -19,7 +19,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { getE2ERuntime, E2E_ORIGIN } from '@/test/e2e/runtime';
 import { HttpWaniKaniApi } from '@/api/HttpWaniKaniApi';
 import type { Database } from '@/db/Database';
-import { prepareRadicalImages } from '@/features/media/radicalImages';
+import { RadicalImagePreparation } from '@/features/media/radicalImages';
 import { ExpoDatabase } from '@/db/ExpoDatabase';
 import { migrateDatabase } from '@/db/migrate';
 import {
@@ -125,19 +125,25 @@ export function AppProviders({ children }: PropsWithChildren) {
         const dataListeners = new Set<() => void>();
         const invalidate = () => {
           for (const listener of dataListeners) listener();
-          // Public media prepares independently; a failed asset never blocks sync
-          // or pending writes. Required study images also retry at point of use.
-          void prepareRadicalImages(openedDatabase).catch(() => {});
+        };
+        const mediaPreparation = new RadicalImagePreparation(openedDatabase);
+        mediaPreparation.setActive(false);
+        const invalidateFromSync = () => {
+          invalidate();
+          // Only subject cursor changes need another walk. Local pending-write
+          // notifications merely refresh data; study media also loads on demand.
+          void mediaPreparation.prepare().catch(() => {});
         };
         let unsubscribeSync: (() => void) | undefined;
         let runtimeToken: string | null = null;
         let runtimeSyncEngine: SyncCoordinator | null = null;
         let runtimeContextKey: string | null = null;
         let foreground = false;
-        disposeRuntime = () => { runtimeSyncEngine?.dispose(); unsubscribeSync?.(); };
+        disposeRuntime = () => { mediaPreparation.dispose(); runtimeSyncEngine?.dispose(); unsubscribeSync?.(); };
         const createSyncEngine = (token: string, context: AccountContext): SyncEngine => {
           const contextKey = `${context.accountEpoch}:${context.credentialRevision}`;
           if (runtimeSyncEngine !== null && runtimeToken === token && runtimeContextKey === contextKey) return runtimeSyncEngine;
+          mediaPreparation.cancel();
           runtimeSyncEngine?.dispose();
           unsubscribeSync?.();
           const engine = new OwnedSyncEngine({
@@ -149,7 +155,7 @@ export function AppProviders({ children }: PropsWithChildren) {
                 onRateLimit: (budget) => scheduler.recordBudget(budget, lease),
               });
             },
-            isOnline, invalidate,
+            isOnline, invalidate: invalidateFromSync,
             updateNotifications: (assertOwner) => rebuildForAccount(context, assertOwner),
             now: () => new Date(),
           });
@@ -194,6 +200,7 @@ export function AppProviders({ children }: PropsWithChildren) {
           },
           syncFactory: createSyncEngine,
           clearAccount: async () => {
+            mediaPreparation.cancel();
             await syncRepository.clearForLogout();
             runtimeSyncEngine?.dispose(); unsubscribeSync?.();
             syncStore.setState({ isSyncing: false, phase: 'idle', lastResult: null });
@@ -210,7 +217,7 @@ export function AppProviders({ children }: PropsWithChildren) {
             rebuildNotifications,
             synchronize,
             notifyPendingWrites: () => { invalidate(); runtimeSyncEngine?.notifyPendingWrites(); },
-            setForeground: (value) => { foreground = value; runtimeSyncEngine?.setForeground(value); },
+            setForeground: (value) => { foreground = value; mediaPreparation.setActive(value); runtimeSyncEngine?.setForeground(value); },
             syncStore,
             subscribeToData: (listener) => { dataListeners.add(listener); return () => { dataListeners.delete(listener); }; },
           });
