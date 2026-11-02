@@ -1,3 +1,5 @@
+/// <reference types="expo/types/metro-require" />
+
 import { registerRootComponent } from 'expo';
 import { ExpoRoot } from 'expo-router';
 
