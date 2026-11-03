@@ -24,47 +24,20 @@ export function StudyHeader({
   return (
     <View>
       <View style={styles.row}>
-        <Text
-          style={[
-            theme.typography.label,
-            styles.title,
-            { color: theme.colors.textMuted },
-          ]}
-        >
-          {title}
-        </Text>
-        <Text
-          accessibilityLabel={`${index} of ${total}`}
-          style={[
-            theme.typography.label,
-            styles.count,
-            { color: theme.colors.text },
-          ]}
-        >
-          {index} / {total}
-        </Text>
-        {onSettings === undefined ? null : (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Study settings"
-            accessibilityState={{ disabled: busy }}
-            disabled={busy}
-            onPress={onSettings}
-            style={styles.control}
-          >
-            <Settings2 size={21} color={theme.colors.textMuted} />
+        <Pressable accessibilityRole="button" accessibilityLabel={exitLabel}
+          disabled={busy} onPress={onExit} style={styles.control}>
+          <X size={22} color={theme.colors.text} />
+        </Pressable>
+        <View style={{ flex: 1, alignItems: 'center', paddingVertical: 8 }}>
+          <Text accessibilityRole="header" style={[theme.typography.sectionTitle, { color: theme.colors.text }]}>{title}</Text>
+          <Text style={[theme.typography.caption, { color: theme.colors.textMuted }]}>{index} of {total}</Text>
+        </View>
+        {onSettings === undefined ? <View style={styles.control} /> : (
+          <Pressable accessibilityRole="button" accessibilityLabel="Study settings"
+            disabled={busy} onPress={onSettings} style={styles.control}>
+            <Settings2 size={21} color={theme.colors.text} />
           </Pressable>
         )}
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={exitLabel}
-          accessibilityState={{ disabled: busy }}
-          disabled={busy}
-          onPress={onExit}
-          style={styles.control}
-        >
-          <X size={22} color={theme.colors.textMuted} />
-        </Pressable>
       </View>
       <View
         accessibilityRole="progressbar"
@@ -89,11 +62,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    paddingLeft: 16,
-    paddingRight: 8,
+    paddingHorizontal: 12,
   },
-  title: { flex: 1 },
-  count: { fontVariant: ['tabular-nums'], marginHorizontal: 8 },
   control: {
     minWidth: 48,
     minHeight: 48,

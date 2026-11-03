@@ -445,6 +445,7 @@ test('wrap-up without attempts saves completion and shows no fabricated accuracy
   const commit = jest.fn(async (_transition: ReviewTransition) => undefined);
   await renderApp(<ThemeProvider scheme="light"><ReviewSessionScreen initialSnapshot={snapshot()}
     subjects={[radicalFixture]} onCommitTransition={commit} onExit={jest.fn()} onFinish={async () => {}} /></ThemeProvider>);
+  await fireEvent.press(screen.getByRole('button', {name: 'Session options'}));
   await fireEvent.press(screen.getByRole('button', { name: 'Wrap up reviews' }));
   expect(await screen.findByText('Reviews complete')).toBeVisible();
   expect(screen.getByText('No reviews completed. Untouched reviews remain due.')).toBeVisible();
@@ -469,6 +470,7 @@ test('skipping is independent from answer overrides', async () => {
   await renderApp(<ThemeProvider scheme="light"><ReviewSessionScreen initialSnapshot={snapshot()}
     settings={{ ...DEFAULT_STUDY_SETTINGS, allowOverrides: false, allowSkipping: true }}
     subjects={[radicalFixture]} onCommitTransition={async () => {}} onExit={jest.fn()} onFinish={async () => {}} /></ThemeProvider>);
+  await fireEvent.press(screen.getByRole('button', {name: 'Session options'}));
   expect(screen.getByRole('button', {name: 'Ask again later'})).toBeVisible();
   expect(screen.getByText(/resets this subject/)).toBeVisible();
 });
@@ -479,6 +481,7 @@ test('wrap-up cannot overtake an in-flight answer save', async () => {
   await renderApp(<ThemeProvider scheme="light"><ReviewSessionScreen initialSnapshot={snapshot()}
     subjects={[radicalFixture]} onCommitTransition={commit} onExit={jest.fn()} onFinish={async () => {}} /></ThemeProvider>);
   await submit('sky');
+  await fireEvent.press(screen.getByRole('button', {name: 'Session options'}));
   expect(screen.getByRole('button', {name: 'Wrap up reviews'})).toBeDisabled();
   await fireEvent.press(screen.getByRole('button', {name: 'Wrap up reviews'}));
   expect(commit).toHaveBeenCalledTimes(1);
@@ -498,7 +501,7 @@ test('saving disclosure settings updates revealed information without losing its
   expect(screen.queryByText('One line is one.')).toBeNull();
   await rendered.rerender(view(true));
   expect(screen.getByText('One line is one.')).toBeVisible();
-  expect(screen.getByLabelText('Reading answer')).toHaveProp('value', 'いち');
+  expect(screen.getByText('いち')).toBeVisible();
   await rendered.rerender(view(false));
   expect(screen.queryByText('One line is one.')).toBeNull();
 });

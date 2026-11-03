@@ -1,3 +1,4 @@
+import { ChevronRight } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, Switch, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -27,8 +28,8 @@ export function StudySettingsScreen({
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const [section, setSection] = useState<
-    'Answers' | 'Reviews' | 'Lessons' | 'Audio'
-  >('Answers');
+    'Reviews' | 'Lessons' | null
+  >(null);
   const scroll = useRef<import('react-native').ScrollView>(null);
   const [draft, setDraft] = useState(settings);
   const [saved, setSaved] = useState(settings);
@@ -115,7 +116,7 @@ export function StudySettingsScreen({
       <Screen
         ref={scroll}
         style={{ flex: 1 }}
-        title="Study settings"
+        title={section ?? "Study settings"}
         intro={
           <Text
             style={[theme.typography.body, { color: theme.colors.textMuted }]}
@@ -133,96 +134,51 @@ export function StudySettingsScreen({
             disabled={busy}
           />
         )}
-        <View
-          accessibilityRole="tablist"
-          accessibilityLabel="Study settings sections"
-          style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}
-        >
-          {(['Answers', 'Reviews', 'Lessons', 'Audio'] as const).map((item) => (
-            <Pressable
-              key={item}
-              accessibilityRole="tab"
-              accessibilityLabel={item}
-              accessibilityState={{ selected: section === item }}
-              onPress={() => {
-                setSection(item);
-                scroll.current?.scrollTo({ y: 0, animated: false });
-              }}
-              style={{
-                minHeight: 48,
-                paddingHorizontal: 14,
-                paddingVertical: 12,
-                borderRadius: 12,
-                backgroundColor:
-                  section === item
-                    ? theme.colors.accentSurface
-                    : theme.colors.surfaceMuted,
-                borderWidth: 1,
-                borderColor:
-                  section === item ? theme.colors.accent : theme.colors.border,
-              }}
-            >
-              <Text
-                style={[
-                  theme.typography.label,
-                  {
-                    color:
-                      section === item
-                        ? theme.colors.accent
-                        : theme.colors.textMuted,
-                  },
-                ]}
+        {section === null ? (
+          <Card style={{ gap: 0 }}>
+            {(['Lessons', 'Reviews'] as const).map((item) => (
+              <Pressable
+                key={item}
+                accessibilityRole="button"
+                disabled={busy}
+                onPress={() => {
+                  setSection(item);
+                  scroll.current?.scrollTo({ y: 0, animated: false });
+                }}
+                style={{ flexDirection: 'row', alignItems: 'center', minHeight: 52, gap: 12 }}
               >
-                {item}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
-        {section === 'Answers' ? (
+                <Text style={[theme.typography.label, { color: theme.colors.text, flex: 1 }]}>
+                  {item}
+                </Text>
+                <ChevronRight size={18} color={theme.colors.textMuted} />
+              </Pressable>
+            ))}
+          </Card>
+        ) : (
+          <StudyAction quiet label="Back to settings" disabled={busy} onPress={() => {
+            setSection(null);
+            scroll.current?.scrollTo({ y: 0, animated: false });
+          }} />
+        )}
+        {section === 'Reviews' ? (
+          <>
           <Card style={{ gap: 22 }}>
-            <SectionTitle label="Answers & marking" />
-            {toggle(
-              'autoAdvance',
-              'Advance correct answers automatically',
-              'Turn off to inspect every result before continuing.',
-            )}
-            {toggle(
-              'allowOverrides',
-              'Allow answer overrides',
-              'Correct a typo or add a meaning synonym in lessons and reviews.',
-            )}
-            {toggle(
-              'allowSkipping',
-              'Allow skipping',
-              'Ask again later resets completed answers for that subject in lessons and reviews. In reviews it also resets mistake counts. The subject moves to the end and remains available until completed.',
-            )}
-            {toggle(
-              'exactMatch',
-              'Exact matching',
-              'Close spellings ask you to retry without a penalty.',
-            )}
-            {toggle(
-              'showFullAnswer',
-              'Reveal all subject information',
-              'Show both meaning and reading after an answer.',
-            )}
+            <SectionTitle label="Review session" />
             <Choice
-              label="Reading input"
-              value={draft.readingInput}
+              label="Review session limit"
+              value={String(draft.reviewLimit)}
               disabled={busy}
               options={[
-                { label: 'Convert to kana', value: 'kana' },
-                { label: 'Keep romaji', value: 'romaji' },
+                { label: 'All available', value: 'null' },
+                ...numberOptions([10, 15, 30, 50], draft.reviewLimit),
               ]}
               onChange={(value) =>
-                set('readingInput', value as StudySettings['readingInput'])
+                set('reviewLimit', value === 'null' ? null : Number(value))
               }
             />
           </Card>
-        ) : null}
-        {section === 'Reviews' ? (
           <Card style={{ gap: 22 }}>
-            <SectionTitle label="Review scheduling" />
+            <SectionTitle label="Order" />
             <Choice
               label="Question order"
               value={draft.questionOrder}
@@ -269,16 +225,47 @@ export function StudySettingsScreen({
               )}
               onChange={(value) => set('incorrectAnswerDelay', Number(value))}
             />
+          </Card>
+          </>
+        ) : null}
+        {section === 'Reviews' ? (
+          <Card style={{ gap: 22 }}>
+            <SectionTitle label="Answers & marking" />
+            {toggle(
+              'autoAdvance',
+              'Advance correct answers automatically',
+              'Turn off to inspect every result before continuing.',
+            )}
+            {toggle(
+              'allowOverrides',
+              'Allow answer overrides',
+              'Correct a typo or add a meaning synonym in lessons and reviews.',
+            )}
+            {toggle(
+              'allowSkipping',
+              'Allow skipping',
+              'Ask again later resets completed answers for that subject in lessons and reviews. In reviews it also resets mistake counts. The subject moves to the end and remains available until completed.',
+            )}
+            {toggle(
+              'exactMatch',
+              'Exact matching',
+              'Close spellings ask you to retry without a penalty.',
+            )}
+            {toggle(
+              'showFullAnswer',
+              'Reveal all subject information',
+              'Show both meaning and reading after an answer.',
+            )}
             <Choice
-              label="Review session limit"
-              value={String(draft.reviewLimit)}
+              label="Reading input"
+              value={draft.readingInput}
               disabled={busy}
               options={[
-                { label: 'All available', value: 'null' },
-                ...numberOptions([10, 15, 30, 50], draft.reviewLimit),
+                { label: 'Convert to kana', value: 'kana' },
+                { label: 'Keep romaji', value: 'romaji' },
               ]}
               onChange={(value) =>
-                set('reviewLimit', value === 'null' ? null : Number(value))
+                set('readingInput', value as StudySettings['readingInput'])
               }
             />
           </Card>
@@ -363,9 +350,9 @@ export function StudySettingsScreen({
             />
           </Card>
         ) : null}
-        {section === 'Audio' ? (
+        {section === 'Reviews' ? (
           <Card style={{ gap: 22 }}>
-            <SectionTitle label="Pronunciation" />
+            <SectionTitle label="Audio" />
             {toggle(
               'autoplay',
               'Play pronunciation automatically',

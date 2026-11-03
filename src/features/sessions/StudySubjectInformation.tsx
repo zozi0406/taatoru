@@ -24,14 +24,16 @@ export function StudySubjectHero({
   readonly onReadyChange?: (ready: boolean) => void;
 }) {
   const compact = useWindowDimensions().height < 500 || compactOverride;
+  const theme = useTheme();
   const colors = subjectColors[subject.object];
+  const ink = theme.scheme === 'light' ? colors.background : colors.foreground;
   return (
     <View
       style={{
-        backgroundColor: colors.background,
+        backgroundColor: theme.scheme === 'light' ? `${colors.background}14` : colors.background,
         alignItems: 'center',
         justifyContent: 'center',
-        minHeight: compact ? 68 : 112,
+        minHeight: compact ? 84 : 174,
         paddingHorizontal: 20,
         paddingVertical: compact ? 6 : 12,
         borderRadius: 16,
@@ -43,9 +45,9 @@ export function StudySubjectHero({
           adjustsFontSizeToFit
           numberOfLines={2}
           style={{
-            color: colors.foreground,
-            fontSize: compact ? 42 : 60,
-            lineHeight: compact ? 54 : 78,
+            color: ink,
+            fontSize: compact ? 52 : 82,
+            lineHeight: compact ? 66 : 104,
             textAlign: 'center',
             alignSelf: 'stretch',
           }}
@@ -57,7 +59,7 @@ export function StudySubjectHero({
           key={subject.id}
           image={radicalImageSource(subject)}
           size={compact ? 52 : 80}
-          color={colors.foreground}
+          color={ink}
           onReadyChange={onReadyChange}
         />
       )}
