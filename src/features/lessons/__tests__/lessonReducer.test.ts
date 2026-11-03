@@ -87,3 +87,15 @@ function quizSnapshot(): LessonSessionSnapshot {
     },
   };
 }
+
+test('jumping to a lesson subject preserves the batch and does not complete a lesson', () => {
+  const state = snapshot();
+  const result = reduceLesson(state, { type: 'select-presentation', position: 1 }, TYPES);
+  expect(result).toEqual({
+    completedItem: null,
+    snapshot: { ...state, queuePosition: 1 },
+  });
+  expect(reduceLesson(state, { type: 'select-presentation', position: 2 }, TYPES).snapshot).toBe(state);
+  const quiz = quizSnapshot();
+  expect(reduceLesson(quiz, { type: 'select-presentation', position: 1 }, TYPES).snapshot).toBe(quiz);
+});

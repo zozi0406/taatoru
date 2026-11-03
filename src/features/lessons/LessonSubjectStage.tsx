@@ -1,3 +1,4 @@
+import { subjectColors } from '@/ui/theme/colors';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { SubjectResource } from '@/api/types';
@@ -7,10 +8,12 @@ import {
   StudySubjectHero,
   StudySubjectInformation,
 } from '@/features/sessions/StudySubjectInformation';
-import { minimumTouchTarget } from '@/ui/theme/spacing';
+import { StudyHeader } from '@/features/sessions/StudyHeader';
 import { useTheme } from '@/ui/theme/ThemeProvider';
 
 interface LessonSubjectStageProps {
+  readonly lessonSubjects: readonly (SubjectResource | undefined)[];
+  readonly onSelect: (position: number) => void;
   readonly index: number;
   readonly total: number;
   readonly subject: SubjectResource;
@@ -28,6 +31,8 @@ interface LessonSubjectStageProps {
 
 export function LessonSubjectStage({
   index,
+  lessonSubjects,
+  onSelect,
   total,
   subject,
   onExit,
@@ -54,51 +59,16 @@ export function LessonSubjectStage({
         paddingTop: insets.top,
       }}
     >
-      <View
-        style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          paddingHorizontal: 16 + insets.left,
-          paddingRight: 16 + insets.right,
-          gap: 12,
-        }}
-      >
-        <Text
-          style={[
-            theme.typography.label,
-            { flex: 1, color: theme.colors.textMuted },
-          ]}
-        >
-          Lesson {index + 1} of {total}
-        </Text>
-        {onSettings === undefined ? null : (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Study settings"
-            disabled={busy}
-            onPress={onSettings}
-            style={{ minHeight: minimumTouchTarget, justifyContent: 'center' }}
-          >
-            <Text style={{ color: theme.colors.accent }}>Settings</Text>
-          </Pressable>
-        )}
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Exit lesson session"
-          disabled={busy}
-          onPress={onExit}
-          style={{
-            minHeight: minimumTouchTarget,
-            paddingHorizontal: 12,
-            justifyContent: 'center',
-          }}
-        >
-          <Text
-            style={[theme.typography.label, { color: theme.colors.accent }]}
-          >
-            Exit
-          </Text>
-        </Pressable>
+      <View style={{ paddingLeft: insets.left, paddingRight: insets.right }}>
+        <StudyHeader
+          title="Lessons"
+          index={index + 1}
+          total={total}
+          busy={busy}
+          exitLabel="Exit lesson session"
+          onExit={onExit}
+          onSettings={onSettings}
+        />
       </View>
       <ScrollView
         contentInsetAdjustmentBehavior="never"
@@ -106,7 +76,7 @@ export function LessonSubjectStage({
           padding: 16,
           paddingLeft: 16 + insets.left,
           paddingRight: 16 + insets.right,
-          gap: 18,
+          gap: 14,
         }}
       >
         <StudySubjectHero subject={subject} />
@@ -114,7 +84,7 @@ export function LessonSubjectStage({
           selectable
           accessibilityRole="header"
           style={[
-            theme.typography.screenTitle,
+            theme.typography.sectionTitle,
             { color: theme.colors.text, textAlign: 'center' },
           ]}
         >
@@ -129,15 +99,35 @@ export function LessonSubjectStage({
           </Text>
         )}
         <StudySubjectInformation
+          presentation
           subject={subject}
           material={material}
           onPlayAudio={onPlayAudio}
           onOpenSubject={onOpenSubject}
         />
-        {index + 1 < total ? (
-          <StudyAction label="Start quiz" onPress={onQuiz} disabled={busy} />
-        ) : null}
       </ScrollView>
+      {total > 1 && (
+        <View style={{ backgroundColor: theme.colors.surface, borderTopWidth: 1, borderColor: theme.colors.border }}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ paddingHorizontal: 16 + Math.max(insets.left, insets.right), paddingVertical: 8, gap: 6 }}>
+            {lessonSubjects.map((item, position) => item === undefined ? null : (
+              <Pressable key={item.id} accessibilityRole="button"
+                accessibilityLabel={`Lesson ${position + 1}: ${item.data.characters ?? item.data.slug}`}
+                accessibilityState={{ selected: position === index, disabled: busy }}
+                disabled={busy || position === index}
+                onPress={() => onSelect(position)}
+                style={{ minWidth: 48, minHeight: 48, paddingHorizontal: 10, justifyContent: 'center', alignItems: 'center',
+                  borderRadius: 10, borderWidth: 2, borderColor: position === index ? theme.colors.accent : 'transparent',
+                  backgroundColor: theme.colors.surfaceMuted }}>
+                <Text style={[theme.typography.label, { color: theme.scheme === 'light' ? subjectColors[item.object].background : theme.colors.text }]}>
+                  {item.data.characters ?? item.data.slug}
+                </Text>
+              </Pressable>
+            ))}
+            {index + 1 < total && <StudyAction label="Start quiz" onPress={onQuiz} disabled={busy} />}
+          </ScrollView>
+        </View>
+      )}
       <View
         style={{
           padding: 16,
@@ -156,6 +146,7 @@ export function LessonSubjectStage({
             label="Previous"
             accessibilityLabel="Previous lesson subject"
             onPress={onPrevious}
+            quiet
             disabled={busy || index === 0}
           />
         </View>

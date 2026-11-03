@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Text } from 'react-native';
 import { useTheme } from '@/ui/theme/ThemeProvider';
-import { StudyAction } from '@/features/sessions/StudySubjectInformation';
 import type { SubjectResource } from '@/api/types';
 import {
   DEFAULT_STUDY_SETTINGS,
@@ -9,7 +8,10 @@ import {
 } from '@/features/settings/studySettings';
 import type { SubjectStudyMaterial } from '@/features/subjects/subjectDetails';
 import { useStudyAnswer } from '@/features/sessions/useStudyAnswer';
-import { StudyCompletion } from '@/features/sessions/StudyCompletion';
+import {
+  StudyCompletion,
+  StudyResultSubject,
+} from '@/features/sessions/StudyCompletion';
 import { useStudyAudio } from '@/features/sessions/useStudyAudio';
 import { ReviewPrompt } from './ReviewPrompt';
 import type { ReviewSessionSnapshot } from './ReviewSessionRepository';
@@ -47,7 +49,12 @@ export function ReviewSessionScreen({
   const theme = useTheme();
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const mounted = useRef(true);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const playAudio = useStudyAudio(onPlayAudio);
   const types = Object.fromEntries(
     subjects.map((subject) => [subject.id, subject.object]),
@@ -56,9 +63,11 @@ export function ReviewSessionScreen({
     settings,
     kind: 'review',
     onAddSynonym,
-    apply: async (type) => {
+    apply: async (type, afterPersist) => {
       const result = reduceReview(snapshot, { type }, types, settings);
       await onCommitTransition(result);
+      if (!mounted.current) return;
+      await afterPersist?.();
       if (!mounted.current) return;
       setSnapshot(result.snapshot);
       const current = subjects.find(
@@ -89,14 +98,15 @@ export function ReviewSessionScreen({
       <StudyCompletion
         title="Reviews complete"
         count={snapshot.queuePosition}
-        detail="reviews recorded on this device"
+        detail="Review progress saved on this device"
+        accuracy={{ correct, total: completed.length }}
         finishLabel="Finish reviews"
         onFinish={onFinish}
       >
         <Text style={[theme.typography.body, { color: theme.colors.text }]}>
           {completed.length === 0
             ? 'No reviews completed. Untouched reviews remain due.'
-            : `${Math.round((correct / completed.length) * 100)}% accuracy · ${correct} of ${completed.length} subjects correct`}
+            : `${correct} of ${completed.length} subjects correct`}
         </Text>
         {missed.length === 0 ? null : (
           <Text style={[theme.typography.label, { color: theme.colors.text }]}>
@@ -108,16 +118,16 @@ export function ReviewSessionScreen({
           const meaning =
             subject?.data.meanings.find(({ primary }) => primary)?.meaning ??
             `Subject ${subjectId}`;
-          return onOpenSubject === undefined ? (
-            <Text key={subjectId} style={{ color: theme.colors.text }}>
-              {meaning}
-            </Text>
-          ) : (
-            <StudyAction
+          return (
+            <StudyResultSubject
               key={subjectId}
-              label={meaning}
-              accessibilityLabel={`Review missed subject: ${meaning}`}
-              onPress={() => onOpenSubject(subjectId)}
+              subject={subject}
+              meaning={meaning}
+              onPress={
+                onOpenSubject === undefined
+                  ? undefined
+                  : () => onOpenSubject(subjectId)
+              }
             />
           );
         })}
@@ -129,6 +139,7 @@ export function ReviewSessionScreen({
     return (
       <StudyCompletion
         title="Review needs attention"
+        status="attention"
         count={0}
         detail="This subject is no longer available. Return home to refresh your library."
         finishLabel="Return home"
@@ -147,8 +158,14 @@ export function ReviewSessionScreen({
       subject={subject}
       prompt={snapshot.currentPrompt}
       onExit={() => actions.guard(onExit)}
-      onSettings={onSettings === undefined ? undefined : () => actions.guard(onSettings)}
-      onOpenSubject={onOpenSubject === undefined ? undefined : (id) => actions.guard(() => onOpenSubject(id))}
+      onSettings={
+        onSettings === undefined ? undefined : () => actions.guard(onSettings)
+      }
+      onOpenSubject={
+        onOpenSubject === undefined
+          ? undefined
+          : (id) => actions.guard(() => onOpenSubject(id))
+      }
       onPlayAudio={playAudio}
       onSubmit={(answer) =>
         actions.submit(
@@ -163,10 +180,14 @@ export function ReviewSessionScreen({
         if (
           actions.error !== null ||
           (actions.feedback !== null && actions.feedback.verdict !== 'retry')
-        ) return;
+        )
+          return;
         void actions.perform(async () => {
           const result = reduceReview(
-            snapshot, { type: 'wrap-up' }, types, settings,
+            snapshot,
+            { type: 'wrap-up' },
+            types,
+            settings,
           );
           await onCommitTransition(result);
           if (mounted.current) setSnapshot(result.snapshot);

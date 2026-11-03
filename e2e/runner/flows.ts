@@ -72,7 +72,7 @@ export function wrapUpCommands(scenario: Scenario, ids: readonly number[]): Comm
     throw new Error('Wrap-up workload requires four subjects ending in a two-part review');
   return [tap('Start reviews'), ...answerCommands(scenario, ids[0]!, 'meaning', true, false),
     ...reviewCommands(scenario, ids.slice(0, -1)), ...answerCommands(scenario, last, 'meaning'),
-    tap('Wrap up reviews'), ...answerCommands(scenario, last, 'reading'),
+    tap('Session options'), tap('Wrap up reviews'), ...answerCommands(scenario, last, 'reading'),
     { assertVisible: 'Reviews complete' }, { assertVisible: '.*75%.*' },
     { assertVisible: scenario.answers[ids[0]!]!.meaning }, tap('Finish reviews'), ...homeReadyCommands()];
 }
@@ -83,7 +83,7 @@ export function readingInputCommands(scenario: Scenario, id: number): Command[] 
   const scrollTo = (text: string): Command => ({ scrollUntilVisible: { element: { text }, direction: 'DOWN', timeout: 30000 } });
   return [tap('Choose lessons'), scrollTo(scenario.answers[id]!.meaning),
     { tapOn: { id: `lesson-subject-${id}` } }, tap('Begin selected lessons'),
-    tap('Study settings'), scrollTo('Reading input: Convert to kana'), tap('Reading input: Convert to kana'),
+    tap('Study settings'), tap('Reviews'), scrollTo('Reading input: Convert to kana'), tap('Reading input: Convert to kana'),
     scrollTo('Save settings'), tap('Save settings'), scrollTo('Back to study'), tap('Back to study'), tap('Continue to quiz'),
     ...answerCommands(scenario, id, 'meaning'), waitFor(`study-answer-${id}-reading`),
     { tapOn: { id: `study-answer-${id}-reading` } },

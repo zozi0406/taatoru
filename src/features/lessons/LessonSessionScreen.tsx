@@ -64,9 +64,10 @@ export function LessonSessionScreen({
   const types = Object.fromEntries(
     subjects.map((subject) => [subject.id, subject.object]),
   );
-  const apply = async (type: Parameters<typeof reduceLesson>[1]['type']) => {
+  const apply = async (type: Parameters<typeof reduceLesson>[1]['type'], afterPersist?: () => Promise<void>, position?: number) => {
     if (!mounted.current) throw new Error('Lesson session is no longer active.');
-    const result = reduceLesson(snapshot, { type }, types, settings);
+    const event = type === 'select-presentation' ? { type, position } : { type };
+    const result = reduceLesson(snapshot, event, types, settings);
     try {
       await onCommitTransition(result);
     } catch (failure) {
@@ -75,6 +76,8 @@ export function LessonSessionScreen({
       }
       throw failure;
     }
+    if (!mounted.current) return;
+    await afterPersist?.();
     if (!mounted.current) return;
     setSnapshot(result.snapshot);
     const current = subjects.find(
@@ -97,13 +100,13 @@ export function LessonSessionScreen({
     onAddSynonym,
     apply,
   });
-  const present = async (type: Parameters<typeof reduceLesson>[1]['type']) => {
+  const present = async (type: Parameters<typeof reduceLesson>[1]['type'], position?: number) => {
     if (presenting.current || restoring) return;
     presenting.current = true;
     setPresentationBusy(true);
     setPresentationError(null);
     try {
-      await apply(type);
+      await apply(type, undefined, position);
     } catch {
       setPresentationError(
         'Unable to preserve lesson progress. Please try again.',
@@ -135,7 +138,7 @@ export function LessonSessionScreen({
       <StudyCompletion
         title="Lesson complete"
         count={snapshot.items.length}
-        detail="new subjects added to Apprentice"
+        detail="New subjects added to Apprentice"
         finishLabel="Finish lessons"
         onFinish={async () => { if (!restoring) await onFinish(); }}
       />
@@ -146,6 +149,7 @@ export function LessonSessionScreen({
     return (
       <StudyCompletion
         title="Lesson needs attention"
+        status="attention"
         count={0}
         detail="This subject is no longer available. Return home to refresh your library."
         finishLabel="Return home"
@@ -159,6 +163,10 @@ export function LessonSessionScreen({
         index={snapshot.queuePosition}
         total={snapshot.items.length}
         subject={subject}
+        lessonSubjects={snapshot.items.map(({ subjectId }) =>
+          subjects.find(({ id }) => id === subjectId),
+        )}
+        onSelect={(position) => { void present('select-presentation', position); }}
         material={studyMaterials[subject.id]}
         onPlayAudio={playAudio}
         busy={presentationBusy || restoring}

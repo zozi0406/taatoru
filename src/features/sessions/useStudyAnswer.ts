@@ -1,11 +1,15 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { SubjectResource } from '@/api/types';
 import { checkAnswer } from '@/features/reviews/answerChecker';
 import type { AnswerResult, ReviewPrompt } from '@/features/reviews/types';
 import type { StudySettings } from '@/features/settings/studySettings';
 
 type AnswerEvent =
-  'correct' | 'incorrect' | 'continue-incorrect' | 'override-correct' | 'skip';
+  | 'correct'
+  | 'incorrect'
+  | 'continue-incorrect'
+  | 'override-correct'
+  | 'skip';
 
 /** A grade is applied once; navigation is unlocked only after local persistence. */
 export function useStudyAnswer({
@@ -14,7 +18,10 @@ export function useStudyAnswer({
   onAddSynonym,
   kind,
 }: {
-  readonly apply: (event: AnswerEvent) => Promise<void>;
+  readonly apply: (
+    event: AnswerEvent,
+    afterPersist?: () => Promise<void>,
+  ) => Promise<void>;
   readonly settings: StudySettings;
   readonly kind: 'review' | 'lesson';
   readonly onAddSynonym?: (subjectId: number, synonym: string) => Promise<void>;
@@ -25,6 +32,20 @@ export function useStudyAnswer({
   const [revision, setRevision] = useState(0);
   const working = useRef(false);
   const lastAction = useRef<(() => Promise<void>) | null>(null);
+  const cue = useRef<{
+    timer: ReturnType<typeof setTimeout>;
+    resolve: () => void;
+  } | null>(null);
+  useEffect(
+    () => () => {
+      if (cue.current !== null) {
+        clearTimeout(cue.current.timer);
+        cue.current.resolve();
+        cue.current = null;
+      }
+    },
+    [],
+  );
 
   const perform = async (action: () => Promise<void>, advance = true) => {
     if (working.current) return;
@@ -83,13 +104,31 @@ export function useStudyAnswer({
       return;
     }
     void perform(async () => {
-      await apply(result.verdict);
+      await apply(
+        result.verdict,
+        result.verdict === 'correct'
+          ? () => {
+              // The caller invokes this only after the answer is durable. Keep its
+              // snapshot on screen while feedback is visible, without unlocking taps.
+              setFeedback(result);
+              return new Promise<void>((resolve) => {
+                const timer = setTimeout(() => {
+                  cue.current = null;
+                  resolve();
+                }, 220);
+                cue.current = { timer, resolve };
+              });
+            }
+          : undefined,
+      );
       if (result.verdict === 'incorrect') setFeedback(result);
     }, result.verdict === 'correct');
   };
   return {
     perform,
-    guard: (action: () => void) => { if (!working.current) action(); },
+    guard: (action: () => void) => {
+      if (!working.current) action();
+    },
     feedback,
     busy,
     error,

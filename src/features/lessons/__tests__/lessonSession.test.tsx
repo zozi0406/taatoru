@@ -50,7 +50,7 @@ test('moves from subject presentation to quiz and completes once', async () => {
       screen.getByRole('button', { name: 'Continue to quiz' }),
     );
   });
-  expect(screen.getByText('Meaning')).toBeVisible();
+  expect(screen.getByText('Radical meaning')).toBeVisible();
 
   await act(async () => {
     await fireEvent.changeText(screen.getByLabelText('Meaning answer'), 'sky');

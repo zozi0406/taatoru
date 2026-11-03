@@ -39,6 +39,7 @@ test('returning to Settings loads modal changes before saving a new draft', asyn
         <SettingsRoute />
       </ThemeProvider>,
     );
+    await fireEvent.press(await screen.findByRole('button', {name: 'Reviews'}));
     await screen.findByRole('radio', {
       name: 'Question order: Meaning → Reading',
       checked: true,
@@ -74,7 +75,7 @@ test('returning to Settings preserves an unsaved draft', async () => {
   await migrateDatabase(db);
   try {
     const rendered = await renderApp(<ThemeProvider scheme="light"><SettingsRoute /></ThemeProvider>);
-    await screen.findByLabelText('Allow skipping');
+    await fireEvent.press(await screen.findByRole('button', {name: 'Reviews'}));
     await fireEvent(screen.getByLabelText('Allow skipping'), 'valueChange', true);
     await act(async () => { mockFocus(); });
     expect(screen.getByLabelText('Allow skipping')).toHaveProp('value', true);

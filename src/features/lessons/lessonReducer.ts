@@ -14,6 +14,7 @@ import type {
 } from '@/features/sessions/SessionRepository';
 
 export type LessonEvent =
+  | { readonly type: 'select-presentation'; readonly position?: number }
   | { readonly type: 'advance-presentation' }
   | { readonly type: 'previous-presentation' }
   | { readonly type: 'start-quiz' }
@@ -34,6 +35,20 @@ export function reduceLesson(
   subjectTypes: Readonly<Record<number, SubjectObject>>,
   options: StudySettings = DEFAULT_STUDY_SETTINGS,
 ): LessonTransition {
+  if (event.type === 'select-presentation') {
+    const position = event.position;
+    return {
+      completedItem: null,
+      snapshot:
+        snapshot.phase === 'presentation' &&
+        position !== undefined &&
+        Number.isInteger(position) &&
+        position >= 0 &&
+        position < snapshot.items.length
+          ? { ...snapshot, queuePosition: position }
+          : snapshot,
+    };
+  }
   if (
     event.type === 'previous-presentation' &&
     snapshot.phase === 'presentation'

@@ -44,7 +44,7 @@ test('reloads a replaced lesson opportunity from a stale completion without reta
     await screen.findByLabelText('Reading answer');
     await db.run('DELETE FROM subject_progress WHERE subject_id = 201');
     await db.run('UPDATE assignments SET id = 999 WHERE subject_id = 201');
-    await fireEvent.changeText(screen.getByLabelText('Reading answer'), 'いち');
+    await fireEvent.changeText(await screen.findByLabelText('Reading answer'), 'いち');
     await fireEvent.press(screen.getByRole('button', { name: 'Submit answer' }));
     await screen.findByText('Lesson availability changed. Reload lessons to continue.');
     expect(await db.first('SELECT COUNT(*) AS count FROM pending_progress')).toEqual({ count: 0 });
@@ -135,12 +135,12 @@ test.each(['meaning', 'reading'] as const)(
       await act(async () => { saveGate.resolve(); });
       await act(async () => { await readEntered.promise; });
       if (prompt === 'meaning') {
-        await fireEvent.changeText(screen.getByLabelText('Reading answer'), 'いち');
+        await fireEvent.changeText(await screen.findByLabelText('Reading answer'), 'いち');
         expect(screen.getByRole('button', { name: 'Submit answer' })).toBeDisabled();
         await fireEvent.press(screen.getByRole('button', { name: 'Submit answer' }));
         expect(await db.first('SELECT COUNT(*) AS count FROM pending_progress')).toEqual({ count: 0 });
       } else {
-        await fireEvent.press(screen.getByRole('button', { name: 'Finish lessons' }));
+        await fireEvent.press(await screen.findByRole('button', { name: 'Finish lessons' }));
         expect(await sessions.loadLessonSession()).not.toBeNull();
       }
       await act(async () => { readGate.resolve(); });
@@ -151,7 +151,7 @@ test.each(['meaning', 'reading'] as const)(
         });
         expect(await db.first('SELECT COUNT(*) AS count FROM pending_progress')).toEqual({ count: 0 });
         // A subsequent save must extend the retained half rather than overwrite it.
-        await fireEvent.changeText(screen.getByLabelText('Reading answer'), 'いち');
+        await fireEvent.changeText(await screen.findByLabelText('Reading answer'), 'いち');
         await fireEvent.press(screen.getByRole('button', { name: 'Submit answer' }));
       }
       await screen.findByText('Lesson complete');

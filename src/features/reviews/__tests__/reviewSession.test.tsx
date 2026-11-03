@@ -54,7 +54,7 @@ test('records incorrect answers and completes a review once', async () => {
     }),
   );
 
-  expect(screen.getByText('Ground')).toBeVisible();
+  expect(screen.getAllByText('Ground')[0]).toBeVisible();
   await act(async () => {
     await fireEvent.press(screen.getByRole('button', { name: 'Continue' }));
   });
@@ -125,7 +125,7 @@ test('an explicit override removes the current mistake before completing once', 
       }),
     }),
   );
-  expect(screen.getByText('Reviews complete')).toBeVisible();
+  expect(await screen.findByText('Reviews complete')).toBeVisible();
 });
 
 test('a failed completion remains retryable and never displays a successful result', async () => {
@@ -164,7 +164,7 @@ test('a failed completion remains retryable and never displays a successful resu
       screen.getByRole('button', { name: 'Try saving again' }),
     );
   });
-  expect(screen.getByText('Reviews complete')).toBeVisible();
+  expect(await screen.findByText('Reviews complete')).toBeVisible();
 });
 
 test('retry guidance does not persist an answer event', async () => {
@@ -219,7 +219,7 @@ test('accepts cached personal synonyms during a review', async () => {
     </ThemeProvider>,
   );
   await submit('Earth');
-  expect(screen.getByText('Reviews complete')).toBeVisible();
+  expect(await screen.findByText('Reviews complete')).toBeVisible();
   expect(commit.mock.calls[0]?.[0].completedItem?.incorrectMeaningAnswers).toBe(
     0,
   );
@@ -269,7 +269,7 @@ test('reading-first still requires meaning and keeps unattempted details hidden'
   await act(async () => {
     await fireEvent.press(screen.getByRole('button', { name: 'Continue' }));
   });
-  expect(screen.getByText('Reviews complete')).toBeVisible();
+  expect(await screen.findByText('Reviews complete')).toBeVisible();
   expect(
     commit.mock.calls.filter(
       ([transition]) => transition.completedItem !== null,
@@ -318,7 +318,7 @@ test('blocks duplicate submissions while a review is being persisted', async () 
   await act(async () => {
     finish();
   });
-  expect(screen.getByText('Reviews complete')).toBeVisible();
+  expect(await screen.findByText('Reviews complete')).toBeVisible();
 });
 
 test('a held wrong-answer commit cannot be overtaken by a correct answer or Exit', async () => {
@@ -382,10 +382,11 @@ test('autoplays a correct vocabulary reading without letting audio failure repea
     'hitotsu',
   );
   await fireEvent.press(screen.getByRole('button', { name: 'Submit answer' }));
+  await screen.findByText('Reviews complete');
   expect(play).toHaveBeenCalledWith(
     vocabularyFixture.data.pronunciation_audios[0]!.url,
   );
-  expect(screen.getByText('Reviews complete')).toBeVisible();
+  expect(await screen.findByText('Reviews complete')).toBeVisible();
   expect(screen.queryByRole('alert')).toBeNull();
   expect(commit).toHaveBeenCalledTimes(1);
 });
@@ -405,13 +406,48 @@ function snapshot(): ReviewSessionSnapshot {
   };
 }
 
+test('shows automatic success only after persistence and blocks another completion during the cue', async () => {
+  jest.useFakeTimers();
+  let release!: () => void;
+  const commit = jest.fn(() => new Promise<void>((resolve) => { release = resolve; }));
+  try {
+    await renderApp(<ThemeProvider scheme="light"><ReviewSessionScreen initialSnapshot={snapshot()}
+      subjects={[radicalFixture]} onCommitTransition={commit} onExit={jest.fn()} onFinish={async () => {}} /></ThemeProvider>);
+    await submit('ground');
+    expect(screen.queryByText('Correct')).toBeNull();
+    await act(async () => { release(); });
+    expect(screen.getByText('Correct')).toBeVisible();
+    expect(screen.queryByText('Reviews complete')).toBeNull();
+    await fireEvent.press(screen.getByRole('button', {name: 'Continue'}));
+    expect(commit).toHaveBeenCalledTimes(1);
+    await act(async () => { jest.advanceTimersByTime(220); });
+    expect(await screen.findByText('Reviews complete')).toBeVisible();
+    expect(commit).toHaveBeenCalledTimes(1);
+  } finally { jest.useRealTimers(); }
+});
+
+test('unmounting during the success cue never repeats the durable write', async () => {
+  jest.useFakeTimers();
+  const commit = jest.fn(async () => {});
+  try {
+    const rendered = await renderApp(<ThemeProvider scheme="light"><ReviewSessionScreen initialSnapshot={snapshot()}
+      subjects={[radicalFixture]} onCommitTransition={commit} onExit={jest.fn()} onFinish={async () => {}} /></ThemeProvider>);
+    await submit('ground');
+    expect(screen.getByText('Correct')).toBeVisible();
+    await rendered.unmount();
+    await act(async () => { jest.runOnlyPendingTimers(); });
+    expect(commit).toHaveBeenCalledTimes(1);
+  } finally { jest.useRealTimers(); }
+});
+
 
 test('wrap-up without attempts saves completion and shows no fabricated accuracy', async () => {
   const commit = jest.fn(async (_transition: ReviewTransition) => undefined);
   await renderApp(<ThemeProvider scheme="light"><ReviewSessionScreen initialSnapshot={snapshot()}
     subjects={[radicalFixture]} onCommitTransition={commit} onExit={jest.fn()} onFinish={async () => {}} /></ThemeProvider>);
+  await fireEvent.press(screen.getByRole('button', {name: 'Session options'}));
   await fireEvent.press(screen.getByRole('button', { name: 'Wrap up reviews' }));
-  expect(screen.getByText('Reviews complete')).toBeVisible();
+  expect(await screen.findByText('Reviews complete')).toBeVisible();
   expect(screen.getByText('No reviews completed. Untouched reviews remain due.')).toBeVisible();
   expect(commit).toHaveBeenCalledWith(expect.objectContaining({ completedItem: null, snapshot: expect.objectContaining({items: [], wrappingUp: true}) }));
 });
@@ -424,7 +460,8 @@ test('completed-subject accuracy counts missed subjects once and links to their 
     items: subjects.map(({id}) => ({assignmentId: id + 400, subjectId: id})),
     incorrectMeaningBySubject: {101: 3}, incorrectReadingBySubject: {101: 1} }}
     subjects={subjects} onOpenSubject={open} onCommitTransition={async () => {}} onExit={jest.fn()} onFinish={async () => {}} /></ThemeProvider>);
-  expect(screen.getByText('75% accuracy · 3 of 4 subjects correct')).toBeVisible();
+  expect(screen.getByText('75%')).toBeVisible();
+  expect(screen.getByText('3 of 4 subjects correct')).toBeVisible();
   await fireEvent.press(screen.getByRole('button', { name: 'Review missed subject: Ground' }));
   expect(open).toHaveBeenCalledWith(101);
 });
@@ -433,6 +470,7 @@ test('skipping is independent from answer overrides', async () => {
   await renderApp(<ThemeProvider scheme="light"><ReviewSessionScreen initialSnapshot={snapshot()}
     settings={{ ...DEFAULT_STUDY_SETTINGS, allowOverrides: false, allowSkipping: true }}
     subjects={[radicalFixture]} onCommitTransition={async () => {}} onExit={jest.fn()} onFinish={async () => {}} /></ThemeProvider>);
+  await fireEvent.press(screen.getByRole('button', {name: 'Session options'}));
   expect(screen.getByRole('button', {name: 'Ask again later'})).toBeVisible();
   expect(screen.getByText(/resets this subject/)).toBeVisible();
 });
@@ -443,6 +481,7 @@ test('wrap-up cannot overtake an in-flight answer save', async () => {
   await renderApp(<ThemeProvider scheme="light"><ReviewSessionScreen initialSnapshot={snapshot()}
     subjects={[radicalFixture]} onCommitTransition={commit} onExit={jest.fn()} onFinish={async () => {}} /></ThemeProvider>);
   await submit('sky');
+  await fireEvent.press(screen.getByRole('button', {name: 'Session options'}));
   expect(screen.getByRole('button', {name: 'Wrap up reviews'})).toBeDisabled();
   await fireEvent.press(screen.getByRole('button', {name: 'Wrap up reviews'}));
   expect(commit).toHaveBeenCalledTimes(1);
@@ -462,7 +501,7 @@ test('saving disclosure settings updates revealed information without losing its
   expect(screen.queryByText('One line is one.')).toBeNull();
   await rendered.rerender(view(true));
   expect(screen.getByText('One line is one.')).toBeVisible();
-  expect(screen.getByLabelText('Reading answer')).toHaveProp('value', 'いち');
+  expect(screen.getByText('いち')).toBeVisible();
   await rendered.rerender(view(false));
   expect(screen.queryByText('One line is one.')).toBeNull();
 });

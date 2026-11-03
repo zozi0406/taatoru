@@ -166,7 +166,10 @@ function CountAction({
   readonly onPress?: () => void;
 }) {
   const disabled = count === 0 || onPress === undefined;
-  const color = label === 'Lessons' ? '#BF1D78' : '#6650C5';
+  const { colors } = useTheme();
+  const primary = label === 'Reviews';
+  const color = primary ? colors.accent : colors.accentSurface;
+  const foreground = primary ? colors.accentForeground : colors.accent;
   const Icon = label === 'Lessons' ? BookOpen : Repeat2;
   return (
     <Pressable
@@ -184,12 +187,12 @@ function CountAction({
       ]}
     >
       <View style={styles.actionTop}>
-        <Icon color="#FFFFFF" size={22} strokeWidth={1.6} />
-        <ArrowUpRight size={19} color="#FFFFFF" />
+        <Icon color={foreground} size={22} strokeWidth={1.6} />
+        <ArrowUpRight size={19} color={foreground} />
       </View>
-      <Text style={styles.actionCount}>{count}</Text>
-      <Text style={styles.actionLabel}>{label}</Text>
-      <Text style={styles.actionHint}>
+      <Text style={[styles.actionCount, { color: foreground }]}>{count}</Text>
+      <Text style={[styles.actionLabel, { color: foreground }]}>{label}</Text>
+      <Text style={[styles.actionHint, { color: foreground }]}>
         {count === 0
           ? 'All caught up'
           : label === 'Lessons'
@@ -235,7 +238,8 @@ function ReviewForecast({
                 <View
                   style={{
                     backgroundColor:
-                      index === 0 ? theme.colors.accent : srsColors.guru,
+                      theme.colors.accent,
+                    opacity: index === 0 ? 1 : 0.62,
                     borderRadius: 5,
                     height: `${(count / maximum) * 100}%`,
                     width: '100%',
