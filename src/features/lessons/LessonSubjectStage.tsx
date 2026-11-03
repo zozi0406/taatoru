@@ -1,4 +1,4 @@
-import { Pressable, ScrollView, Text, View } from 'react-native';
+import { ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { SubjectResource } from '@/api/types';
 import type { SubjectStudyMaterial } from '@/features/subjects/subjectDetails';
@@ -7,7 +7,7 @@ import {
   StudySubjectHero,
   StudySubjectInformation,
 } from '@/features/sessions/StudySubjectInformation';
-import { minimumTouchTarget } from '@/ui/theme/spacing';
+import { StudyHeader } from '@/features/sessions/StudyHeader';
 import { useTheme } from '@/ui/theme/ThemeProvider';
 
 interface LessonSubjectStageProps {
@@ -54,51 +54,16 @@ export function LessonSubjectStage({
         paddingTop: insets.top,
       }}
     >
-      <View
-        style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          paddingHorizontal: 16 + insets.left,
-          paddingRight: 16 + insets.right,
-          gap: 12,
-        }}
-      >
-        <Text
-          style={[
-            theme.typography.label,
-            { flex: 1, color: theme.colors.textMuted },
-          ]}
-        >
-          Lesson {index + 1} of {total}
-        </Text>
-        {onSettings === undefined ? null : (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Study settings"
-            disabled={busy}
-            onPress={onSettings}
-            style={{ minHeight: minimumTouchTarget, justifyContent: 'center' }}
-          >
-            <Text style={{ color: theme.colors.accent }}>Settings</Text>
-          </Pressable>
-        )}
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Exit lesson session"
-          disabled={busy}
-          onPress={onExit}
-          style={{
-            minHeight: minimumTouchTarget,
-            paddingHorizontal: 12,
-            justifyContent: 'center',
-          }}
-        >
-          <Text
-            style={[theme.typography.label, { color: theme.colors.accent }]}
-          >
-            Exit
-          </Text>
-        </Pressable>
+      <View style={{ paddingLeft: insets.left, paddingRight: insets.right }}>
+        <StudyHeader
+          title="Lessons"
+          index={index + 1}
+          total={total}
+          busy={busy}
+          exitLabel="Exit lesson session"
+          onExit={onExit}
+          onSettings={onSettings}
+        />
       </View>
       <ScrollView
         contentInsetAdjustmentBehavior="never"
@@ -106,7 +71,7 @@ export function LessonSubjectStage({
           padding: 16,
           paddingLeft: 16 + insets.left,
           paddingRight: 16 + insets.right,
-          gap: 18,
+          gap: 14,
         }}
       >
         <StudySubjectHero subject={subject} />
@@ -114,7 +79,7 @@ export function LessonSubjectStage({
           selectable
           accessibilityRole="header"
           style={[
-            theme.typography.screenTitle,
+            theme.typography.sectionTitle,
             { color: theme.colors.text, textAlign: 'center' },
           ]}
         >
@@ -129,6 +94,7 @@ export function LessonSubjectStage({
           </Text>
         )}
         <StudySubjectInformation
+          presentation
           subject={subject}
           material={material}
           onPlayAudio={onPlayAudio}

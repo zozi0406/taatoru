@@ -39,6 +39,7 @@ test('returning to Settings loads modal changes before saving a new draft', asyn
         <SettingsRoute />
       </ThemeProvider>,
     );
+    await fireEvent.press(await screen.findByRole('tab', {name: 'Reviews'}));
     await screen.findByRole('radio', {
       name: 'Question order: Meaning → Reading',
       checked: true,

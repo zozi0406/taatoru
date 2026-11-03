@@ -11,7 +11,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Settings2 } from 'lucide-react-native';
+import { CheckCircle2, XCircle } from 'lucide-react-native';
 
 import type { SubjectResource } from '@/api/types';
 import type {
@@ -23,6 +23,7 @@ import type { StudySettings } from '@/features/settings/studySettings';
 import type { SubjectStudyMaterial } from '@/features/subjects/subjectDetails';
 import { romajiToKana } from '@/features/search/kana';
 import { useTheme } from '@/ui/theme/ThemeProvider';
+import { StudyHeader } from './StudyHeader';
 import { minimumTouchTarget } from '@/ui/theme/spacing';
 import {
   StudyAction,
@@ -88,19 +89,37 @@ export function StudyQuestion({
   const compact = useWindowDimensions().height < 500;
   const insets = useSafeAreaInsets();
   const input = useRef<TextInput>(null);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  useEffect(() => {
+    const show = Keyboard.addListener('keyboardDidShow', () =>
+      setKeyboardVisible(true),
+    );
+    const hide = Keyboard.addListener('keyboardDidHide', () =>
+      setKeyboardVisible(false),
+    );
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
   const [answer, setAnswer] = useState('');
-  const [readyImageSubject, setReadyImageSubject] = useState<number | null>(null);
-  const imageReady = subject.data.characters !== null ||
-    readyImageSubject === subject.id;
-  const onImageReady = useCallback((ready: boolean) => {
-    setReadyImageSubject(ready ? subject.id : null);
-  }, [subject.id]);
+  const [readyImageSubject, setReadyImageSubject] = useState<number | null>(
+    null,
+  );
+  const imageReady =
+    subject.data.characters !== null || readyImageSubject === subject.id;
+  const onImageReady = useCallback(
+    (ready: boolean) => {
+      setReadyImageSubject(ready ? subject.id : null);
+    },
+    [subject.id],
+  );
   const [revealedAll, setShowAll] = useState(false);
   const showAll = settings.showFullAnswer || revealedAll;
   const graded = feedback !== null && feedback.verdict !== 'retry';
   useEffect(() => {
-    if (graded) Keyboard.dismiss();
-  }, [graded]);
+    if (graded && !busy) Keyboard.dismiss();
+  }, [graded, busy]);
   const submit = () => {
     if (graded) onContinue();
     else if (imageReady && answer.trim() !== '' && !busy) onSubmit(answer);
@@ -124,69 +143,15 @@ export function StudyQuestion({
         paddingTop: insets.top,
       }}
     >
-      <View
-        style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          paddingHorizontal: 16 + insets.left,
-          paddingRight: 16 + insets.right,
-          gap: 8,
-        }}
-      >
-        <Text
-          style={[
-            theme.typography.label,
-            { color: theme.colors.textMuted, flex: 1 },
-          ]}
-        >
-          {title} · {index} / {total} complete
-        </Text>
-        {onSettings === undefined ? null : (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Study settings"
-            onPress={onSettings}
-            disabled={busy}
-            style={{
-              minHeight: minimumTouchTarget,
-              minWidth: minimumTouchTarget,
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <Settings2 size={22} color={theme.colors.accent} />
-          </Pressable>
-        )}
-        <Pressable
-          accessibilityLabel={exitLabel}
-          accessibilityRole="button"
-          disabled={busy}
-          onPress={onExit}
-          style={{
-            minHeight: minimumTouchTarget,
-            paddingHorizontal: 12,
-            justifyContent: 'center',
-          }}
-        >
-          <Text
-            style={[theme.typography.label, { color: theme.colors.accent }]}
-          >
-            Exit
-          </Text>
-        </Pressable>
-      </View>
-      <View
-        accessibilityRole="progressbar"
-        accessibilityLabel={`${title} progress`}
-        accessibilityValue={{ min: 0, max: Math.max(1, total), now: index }}
-        style={{ height: 3, backgroundColor: theme.colors.surfaceMuted }}
-      >
-        <View
-          style={{
-            backgroundColor: theme.colors.accent,
-            height: 3,
-            width: `${total ? (index / total) * 100 : 0}%`,
-          }}
+      <View style={{ paddingLeft: insets.left, paddingRight: insets.right }}>
+        <StudyHeader
+          title={title}
+          index={index}
+          total={total}
+          busy={busy}
+          exitLabel={exitLabel}
+          onExit={onExit}
+          onSettings={onSettings}
         />
       </View>
       <ScrollView
@@ -200,31 +165,40 @@ export function StudyQuestion({
           paddingRight: 16 + insets.right,
         }}
       >
-        <StudySubjectHero subject={subject} onReadyChange={onImageReady} />
+        <StudySubjectHero
+          subject={subject}
+          compact={compact || keyboardVisible}
+          onReadyChange={onImageReady}
+        />
         <View
           style={{
+            flexDirection: 'row',
+            flexWrap: 'wrap',
             alignItems: 'center',
-            justifyContent: 'center',
-            flexDirection: compact ? 'row' : 'column',
-            gap: compact ? 12 : 3,
+            justifyContent: 'space-between',
+            gap: 8,
+            paddingHorizontal: 14,
+            paddingVertical: 10,
+            borderRadius: 10,
+            backgroundColor: theme.colors.surfaceMuted,
+            borderLeftWidth: 3,
+            borderLeftColor:
+              prompt === 'meaning' ? theme.colors.accent : theme.colors.focus,
           }}
         >
+          <Text
+            accessibilityRole="header"
+            style={[theme.typography.label, { color: theme.colors.text }]}
+          >
+            {prompt === 'meaning' ? 'Meaning' : 'Reading'}
+          </Text>
           <Text
             style={[
               theme.typography.caption,
               { color: theme.colors.textMuted },
             ]}
           >
-            {typeLabel}
-          </Text>
-          <Text
-            accessibilityRole="header"
-            style={[
-              theme.typography.sectionTitle,
-              { color: theme.colors.text },
-            ]}
-          >
-            {prompt === 'meaning' ? 'Meaning' : 'Reading'}
+            {typeLabel} · {prompt === 'meaning' ? 'English' : 'Japanese'}
           </Text>
         </View>
         <TextInput
@@ -269,14 +243,41 @@ export function StudyQuestion({
           ]}
         />
         {feedback === null ? null : (
-          <View accessibilityLiveRegion="polite" style={{ gap: 8 }}>
-            <Text style={[theme.typography.label, { color: resultColor }]}>
-              {feedback.verdict === 'correct'
-                ? 'Correct'
-                : feedback.verdict === 'incorrect'
-                  ? 'Incorrect'
-                  : 'Check the prompt and try again'}
-            </Text>
+          <View
+            accessibilityLiveRegion="polite"
+            style={{
+              gap: 12,
+              padding: 16,
+              borderRadius: 14,
+              backgroundColor:
+                feedback.verdict === 'correct'
+                  ? theme.colors.successSurface
+                  : feedback.verdict === 'incorrect'
+                    ? theme.colors.dangerSurface
+                    : theme.colors.surfaceMuted,
+            }}
+          >
+            <View
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}
+            >
+              {feedback.verdict === 'correct' ? (
+                <CheckCircle2 color={resultColor} size={22} />
+              ) : feedback.verdict === 'incorrect' ? (
+                <XCircle color={resultColor} size={22} />
+              ) : null}
+              <Text
+                style={[
+                  theme.typography.label,
+                  { color: resultColor, flex: 1 },
+                ]}
+              >
+                {feedback.verdict === 'correct'
+                  ? 'Correct'
+                  : feedback.verdict === 'incorrect'
+                    ? 'Incorrect'
+                    : 'Check the prompt and try again'}
+              </Text>
+            </View>
             {feedback.verdict === 'retry' ? (
               <Text
                 style={[
@@ -288,24 +289,56 @@ export function StudyQuestion({
               </Text>
             ) : null}
             {feedback.verdict === 'incorrect' ? (
-              <Text
-                selectable
-                style={[theme.typography.body, { color: theme.colors.text }]}
-              >
-                Accepted: {feedback.expected.join(', ')}
-              </Text>
-            ) : null}
-            {feedback.verdict === 'incorrect' ? (
-              <Text
-                style={[
-                  theme.typography.caption,
-                  { color: theme.colors.textMuted },
-                ]}
-              >
-                {total - index <= 1 || settings.incorrectAnswerDelay === 0
-                  ? 'Continue to try this question again.'
-                  : 'Continue with other subjects. This question will return.'}
-              </Text>
+              <>
+                <View style={{ gap: 4 }}>
+                  <Text
+                    style={[
+                      theme.typography.caption,
+                      { color: theme.colors.textMuted },
+                    ]}
+                  >
+                    Your answer
+                  </Text>
+                  <Text
+                    selectable
+                    style={[
+                      theme.typography.body,
+                      { color: theme.colors.text },
+                    ]}
+                  >
+                    {answer}
+                  </Text>
+                </View>
+                <View style={{ gap: 4 }}>
+                  <Text
+                    style={[
+                      theme.typography.caption,
+                      { color: theme.colors.textMuted },
+                    ]}
+                  >
+                    Accepted answer
+                  </Text>
+                  <Text
+                    selectable
+                    style={[
+                      theme.typography.sectionTitle,
+                      { color: theme.colors.text },
+                    ]}
+                  >
+                    {feedback.expected.join(', ')}
+                  </Text>
+                </View>
+                <Text
+                  style={[
+                    theme.typography.caption,
+                    { color: theme.colors.textMuted },
+                  ]}
+                >
+                  {total - index <= 1 || settings.incorrectAnswerDelay === 0
+                    ? 'Continue to try this question again.'
+                    : 'Continue with other subjects. This question will return.'}
+                </Text>
+              </>
             ) : null}
           </View>
         )}
@@ -338,17 +371,19 @@ export function StudyQuestion({
             )}
           </View>
         )}
-        {graded ? (
+        {graded && !busy ? (
           <>
             {feedback.verdict === 'incorrect' && settings.allowOverrides ? (
               <View style={{ gap: 10 }}>
                 <StudyAction
+                  quiet
                   label="My answer was correct"
                   onPress={onOverride}
                   disabled={busy || error !== null}
                 />
                 {prompt === 'meaning' && onAddSynonym !== undefined ? (
                   <StudyAction
+                    quiet
                     label="Add synonym and mark correct"
                     onPress={() => onAddSynonym(answer)}
                     disabled={busy || error !== null}
@@ -369,9 +404,15 @@ export function StudyQuestion({
         ) : null}
         {settings.allowSkipping ? (
           <>
-            <Text style={[theme.typography.caption, { color: theme.colors.textMuted }]}>
-              Ask again later resets this subject’s completed answers. In reviews
-              it also resets mistake counts. It remains available until completed.
+            <Text
+              style={[
+                theme.typography.caption,
+                { color: theme.colors.textMuted },
+              ]}
+            >
+              Ask again later resets this subject’s completed answers. In
+              reviews it also resets mistake counts. It remains available until
+              completed.
             </Text>
             <StudyAction
               label="Ask again later"
@@ -381,7 +422,12 @@ export function StudyQuestion({
           </>
         ) : null}
         {wrappingUp ? (
-          <Text style={[theme.typography.caption, { color: theme.colors.textMuted }]}>
+          <Text
+            style={[
+              theme.typography.caption,
+              { color: theme.colors.textMuted },
+            ]}
+          >
             Wrapping up attempted subjects. Untouched reviews remain due.
           </Text>
         ) : onWrapUp === undefined ? null : (
@@ -407,8 +453,11 @@ export function StudyQuestion({
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={graded ? 'Continue' : 'Submit answer'}
-          disabled={busy || error !== null ||
-            (!graded && (!imageReady || answer.trim() === ''))}
+          disabled={
+            busy ||
+            error !== null ||
+            (!graded && (!imageReady || answer.trim() === ''))
+          }
           onPress={submit}
           style={{
             minHeight: minimumTouchTarget,
@@ -418,7 +467,8 @@ export function StudyQuestion({
             justifyContent: 'center',
             backgroundColor: theme.colors.accent,
             opacity:
-              busy || error !== null ||
+              busy ||
+              error !== null ||
               (!graded && (!imageReady || answer.trim() === ''))
                 ? 0.5
                 : 1,
@@ -430,7 +480,13 @@ export function StudyQuestion({
               { color: theme.colors.accentForeground },
             ]}
           >
-            {busy ? 'Saving…' : graded ? 'Continue' : 'Check answer'}
+            {busy
+              ? feedback?.verdict === 'correct'
+                ? 'Continuing…'
+                : 'Saving…'
+              : graded
+                ? 'Continue'
+                : 'Check answer'}
           </Text>
         </Pressable>
       </View>
@@ -443,7 +499,9 @@ export function kanaInput(value: string): string {
   if (/nn$/i.test(value)) return romajiToKana(value.slice(0, -2)).text + 'ん';
   if (/mm$/i.test(value)) return romajiToKana(value.slice(0, -2)).text + 'っm';
   if (/[nm]$/i.test(value))
-    return romajiToKana(value.slice(0, -1)).text + value.slice(-1).toLowerCase();
+    return (
+      romajiToKana(value.slice(0, -1)).text + value.slice(-1).toLowerCase()
+    );
   return romajiToKana(value).text;
 }
 

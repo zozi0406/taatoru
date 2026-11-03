@@ -1,11 +1,7 @@
+import { useState } from 'react';
 import { useAudioPlayer } from 'expo-audio';
-import {
-  Pressable,
-  Text,
-  View,
-  useWindowDimensions,
-} from 'react-native';
-import { Volume2 } from 'lucide-react-native';
+import { Pressable, Text, View, useWindowDimensions } from 'react-native';
+import { ChevronDown, ChevronUp, Volume2 } from 'lucide-react-native';
 import type { ReactNode } from 'react';
 
 import type { SubjectResource } from '@/api/types';
@@ -21,11 +17,13 @@ import { useTheme } from '@/ui/theme/ThemeProvider';
 export function StudySubjectHero({
   subject,
   onReadyChange,
+  compact: compactOverride = false,
 }: {
   readonly subject: SubjectResource;
+  readonly compact?: boolean;
   readonly onReadyChange?: (ready: boolean) => void;
 }) {
-  const compact = useWindowDimensions().height < 500;
+  const compact = useWindowDimensions().height < 500 || compactOverride;
   const colors = subjectColors[subject.object];
   return (
     <View
@@ -33,9 +31,9 @@ export function StudySubjectHero({
         backgroundColor: colors.background,
         alignItems: 'center',
         justifyContent: 'center',
-        minHeight: compact ? 80 : 150,
+        minHeight: compact ? 68 : 112,
         paddingHorizontal: 20,
-        paddingVertical: compact ? 8 : 20,
+        paddingVertical: compact ? 6 : 12,
         borderRadius: 16,
       }}
     >
@@ -46,8 +44,8 @@ export function StudySubjectHero({
           numberOfLines={2}
           style={{
             color: colors.foreground,
-            fontSize: compact ? 44 : 76,
-            lineHeight: compact ? 56 : 100,
+            fontSize: compact ? 42 : 60,
+            lineHeight: compact ? 54 : 78,
             textAlign: 'center',
             alignSelf: 'stretch',
           }}
@@ -58,7 +56,7 @@ export function StudySubjectHero({
         <RadicalImage
           key={subject.id}
           image={radicalImageSource(subject)}
-          size={compact ? 64 : 100}
+          size={compact ? 52 : 80}
           color={colors.foreground}
           onReadyChange={onReadyChange}
         />
@@ -75,6 +73,7 @@ export function StudySubjectInformation({
   onShowAll,
   onPlayAudio,
   onOpenSubject,
+  presentation = false,
 }: {
   readonly subject: SubjectResource;
   readonly material?: SubjectStudyMaterial;
@@ -83,6 +82,7 @@ export function StudySubjectInformation({
   readonly onShowAll?: () => void;
   readonly onPlayAudio?: (url: string) => void;
   readonly onOpenSubject?: (id: number) => void;
+  readonly presentation?: boolean;
 }) {
   const theme = useTheme();
   const showMeaning = showAll || revealedPrompt === 'meaning';
@@ -92,8 +92,41 @@ export function StudySubjectInformation({
       ? subject.data.pronunciation_audios[0]
       : undefined;
   const textStyle = [theme.typography.body, { color: theme.colors.text }];
+  const readingSection = (
+    <InformationSection title="Reading">
+      {'readings' in subject.data ? (
+        [...subject.data.readings]
+          .sort((a, b) => Number(b.primary) - Number(a.primary))
+          .map((reading) => (
+            <Text key={reading.reading} selectable style={textStyle}>
+              {reading.reading}
+              {'type' in reading
+                ? ` · ${reading.type === 'onyomi' ? 'On’yomi' : reading.type === 'kunyomi' ? 'Kun’yomi' : 'Nanori'}`
+                : ''}
+              {reading.primary ? ' · Primary' : ''}
+            </Text>
+          ))
+      ) : (
+        <Text selectable style={textStyle}>
+          {subject.data.characters}
+        </Text>
+      )}
+      {audio === undefined ? null : (
+        <StudyAudio
+          url={audio.url}
+          pronunciation={audio.metadata.pronunciation}
+          onPlayAudio={onPlayAudio}
+        />
+      )}
+    </InformationSection>
+  );
   return (
     <View style={{ gap: 18 }}>
+      {presentation &&
+      showReading &&
+      ('readings' in subject.data || subject.object === 'kana_vocabulary')
+        ? readingSection
+        : null}
       {showMeaning ? (
         <>
           <InformationSection title="Meaning">
@@ -126,32 +159,7 @@ export function StudySubjectInformation({
       {showReading &&
       ('readings' in subject.data || subject.object === 'kana_vocabulary') ? (
         <>
-          <InformationSection title="Reading">
-            {'readings' in subject.data ? (
-              [...subject.data.readings]
-                .sort((a, b) => Number(b.primary) - Number(a.primary))
-                .map((reading) => (
-                  <Text key={reading.reading} selectable style={textStyle}>
-                    {reading.reading}
-                    {'type' in reading
-                      ? ` · ${reading.type === 'onyomi' ? 'On’yomi' : reading.type === 'kunyomi' ? 'Kun’yomi' : 'Nanori'}`
-                      : ''}
-                    {reading.primary ? ' · Primary' : ''}
-                  </Text>
-                ))
-            ) : (
-              <Text selectable style={textStyle}>
-                {subject.data.characters}
-              </Text>
-            )}
-            {audio === undefined ? null : (
-              <StudyAudio
-                url={audio.url}
-                pronunciation={audio.metadata.pronunciation}
-                onPlayAudio={onPlayAudio}
-              />
-            )}
-          </InformationSection>
+          {presentation ? null : readingSection}
           {'reading_mnemonic' in subject.data ? (
             <InformationSection title="Reading mnemonic">
               <WaniKaniText selectable style={textStyle}>
@@ -174,7 +182,7 @@ export function StudySubjectInformation({
       {showAll &&
       'context_sentences' in subject.data &&
       subject.data.context_sentences.length > 0 ? (
-        <InformationSection title="Context sentences">
+        <InformationSection title="Context sentences" collapsible>
           {subject.data.context_sentences.map((sentence) => (
             <View key={sentence.ja} style={{ gap: 6 }}>
               <Text selectable style={textStyle}>
@@ -194,7 +202,7 @@ export function StudySubjectInformation({
         </InformationSection>
       ) : null}
       {showAll && 'parts_of_speech' in subject.data ? (
-        <InformationSection title="Part of speech">
+        <InformationSection title="Part of speech" collapsible>
           <Text selectable style={textStyle}>
             {subject.data.parts_of_speech.join(', ')}
           </Text>
@@ -216,29 +224,58 @@ export function StudySubjectInformation({
 export function InformationSection({
   title,
   children,
+  collapsible = false,
 }: {
   readonly title: string;
   readonly children: ReactNode;
+  readonly collapsible?: boolean;
 }) {
   const theme = useTheme();
+  const [expanded, setExpanded] = useState(false);
+  const heading = (
+    <Text
+      accessibilityRole={collapsible ? undefined : 'header'}
+      style={[
+        theme.typography.label,
+        { color: theme.colors.textMuted, flex: 1 },
+      ]}
+    >
+      {title}
+    </Text>
+  );
   return (
     <View
       style={{
         gap: 10,
-        padding: 18,
-        backgroundColor: theme.colors.surface,
-        borderRadius: 14,
-        borderWidth: 1,
+        paddingVertical: 14,
+        borderTopWidth: 1,
         borderColor: theme.colors.border,
       }}
     >
-      <Text
-        accessibilityRole="header"
-        style={[theme.typography.label, { color: theme.colors.textMuted }]}
-      >
-        {title}
-      </Text>
-      {children}
+      {collapsible ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={title}
+          accessibilityState={{ expanded }}
+          onPress={() => setExpanded((value) => !value)}
+          style={{
+            minHeight: 48,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 12,
+          }}
+        >
+          {heading}
+          {expanded ? (
+            <ChevronUp size={20} color={theme.colors.textMuted} />
+          ) : (
+            <ChevronDown size={20} color={theme.colors.textMuted} />
+          )}
+        </Pressable>
+      ) : (
+        heading
+      )}
+      {!collapsible || expanded ? children : null}
     </View>
   );
 }
@@ -249,11 +286,13 @@ export function StudyAction({
   onPress,
   disabled = false,
   primary = false,
+  quiet = false,
 }: {
   readonly label: string;
   readonly onPress: () => void;
   readonly disabled?: boolean;
   readonly primary?: boolean;
+  readonly quiet?: boolean;
   readonly accessibilityLabel?: string;
 }) {
   const theme = useTheme();
@@ -271,7 +310,11 @@ export function StudyAction({
         borderRadius: 12,
         backgroundColor: primary
           ? theme.colors.accent
-          : theme.colors.surfaceMuted,
+          : quiet
+            ? 'transparent'
+            : theme.colors.surfaceMuted,
+        borderWidth: quiet ? 1 : 0,
+        borderColor: theme.colors.border,
         opacity: disabled || pressed ? 0.5 : 1,
       })}
       onPress={onPress}

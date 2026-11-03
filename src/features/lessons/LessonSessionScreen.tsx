@@ -64,7 +64,7 @@ export function LessonSessionScreen({
   const types = Object.fromEntries(
     subjects.map((subject) => [subject.id, subject.object]),
   );
-  const apply = async (type: Parameters<typeof reduceLesson>[1]['type']) => {
+  const apply = async (type: Parameters<typeof reduceLesson>[1]['type'], afterPersist?: () => Promise<void>) => {
     if (!mounted.current) throw new Error('Lesson session is no longer active.');
     const result = reduceLesson(snapshot, { type }, types, settings);
     try {
@@ -75,6 +75,8 @@ export function LessonSessionScreen({
       }
       throw failure;
     }
+    if (!mounted.current) return;
+    await afterPersist?.();
     if (!mounted.current) return;
     setSnapshot(result.snapshot);
     const current = subjects.find(
@@ -135,7 +137,7 @@ export function LessonSessionScreen({
       <StudyCompletion
         title="Lesson complete"
         count={snapshot.items.length}
-        detail="new subjects added to Apprentice"
+        detail="New subjects added to Apprentice"
         finishLabel="Finish lessons"
         onFinish={async () => { if (!restoring) await onFinish(); }}
       />
@@ -146,6 +148,7 @@ export function LessonSessionScreen({
     return (
       <StudyCompletion
         title="Lesson needs attention"
+        status="attention"
         count={0}
         detail="This subject is no longer available. Return home to refresh your library."
         finishLabel="Return home"

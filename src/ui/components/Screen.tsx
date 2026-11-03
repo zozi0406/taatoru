@@ -1,4 +1,4 @@
-import type { PropsWithChildren, ReactNode } from 'react';
+import type { PropsWithChildren, ReactNode, Ref } from 'react';
 import { ScrollView, type ScrollViewProps } from 'react-native';
 
 import { useTheme } from '../theme/ThemeProvider';
@@ -6,6 +6,7 @@ import { useScreenPadding } from '../theme/useScreenPadding';
 import { PageHeading } from './PageHeading';
 
 interface ScreenProps extends PropsWithChildren<ScrollViewProps> {
+  readonly ref?: Ref<ScrollView>;
   readonly title: string;
   readonly intro?: ReactNode;
 }
